@@ -1,0 +1,14 @@
+{
+  "name": "superbabysitter",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Quality-gated development workflow skill for Claude Code + babysitter SDK",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/joe-habu/superbabysitter.git"
+  },
+  "dependencies": {
+    "@a5c-ai/babysitter-sdk": "^0.0.168"
+  }
+}
