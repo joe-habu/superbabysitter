@@ -80,35 +80,58 @@ export const planVerifierTask = defineTask('plan-verifier', (args, taskCtx) => (
 export async function planningGate(inputs, ctx) {
   ctx.log('Phase 2: Planning Gate');
 
-  const planResult = await ctx.task(planWriterTask, {
-    feature: inputs.feature,
-    design: inputs.designResult,
-    instructions: [
-      'IRON LAW: Every task must be bite-sized (2-5 minutes, ONE action per step)',
-      'Assume engineer has zero codebase context',
-      'Each task: write failing test -> verify fail -> implement minimal -> verify pass -> commit',
-      'Include exact file paths, complete code, exact commands with expected output',
-      'DRY. YAGNI. TDD. Frequent commits.',
-      'Write plan to artifacts/plan.md'
-    ]
-  });
+  let planResult;
+  let planVerifyResult;
+  const MAX_PLAN_ATTEMPTS = 2;
 
-  const planVerifyResult = await ctx.task(planVerifierTask, {
-    plan: planResult,
-    design: inputs.designResult,
-    instructions: [
-      'IRON LAW: Do not trust the plan writer. Verify independently.',
-      'Check: Does plan cover all design requirements?',
-      'Check: Is every task truly bite-sized?',
-      'Check: Does every task follow TDD?',
-      'Check: Are file paths exact and complete?',
-      'Write verification to artifacts/plan-verification.md'
-    ]
-  });
+  for (let attempt = 1; attempt <= MAX_PLAN_ATTEMPTS; attempt++) {
+    const additionalInstructions = (attempt > 1 && planVerifyResult)
+      ? [`REVISION: Fix these gaps from the previous plan attempt:\n${planVerifyResult.gaps.join('\n')}`]
+      : [];
+
+    planResult = await ctx.task(planWriterTask, {
+      feature: inputs.feature,
+      design: inputs.designResult,
+      instructions: [
+        'IRON LAW: Every task must be bite-sized (2-5 minutes, ONE action per step)',
+        'Assume engineer has zero codebase context',
+        'Each task: write failing test -> verify fail -> implement minimal -> verify pass -> commit',
+        'Include exact file paths, complete code, exact commands with expected output',
+        'DRY. YAGNI. TDD. Frequent commits.',
+        'Write plan to artifacts/plan.md',
+        ...additionalInstructions
+      ]
+    });
+
+    planVerifyResult = await ctx.task(planVerifierTask, {
+      plan: planResult,
+      design: inputs.designResult,
+      instructions: [
+        'IRON LAW: Do not trust the plan writer. Verify independently.',
+        'Check: Does plan cover all design requirements?',
+        'Check: Is every task truly bite-sized?',
+        'Check: Does every task follow TDD?',
+        'Check: Are file paths exact and complete?',
+        'Write verification to artifacts/plan-verification.md'
+      ]
+    });
+
+    if (planVerifyResult.passed) break;
+    if (attempt < MAX_PLAN_ATTEMPTS) {
+      ctx.log(`Plan verification failed (attempt ${attempt}). Revising with gaps: ${planVerifyResult.gaps.join(', ')}`);
+    }
+  }
 
   // HARD GATE: Human must approve plan before implementation
   await ctx.breakpoint({
-    question: `Review the implementation plan (${planResult.taskCount} tasks). Approve to begin TDD implementation?`,
+    question: [
+      `Review the implementation plan (${planResult.taskCount} tasks).`,
+      planVerifyResult.passed
+        ? 'Verification passed.'
+        : `Verification found gaps: ${planVerifyResult.gaps.join(', ')}`,
+      '',
+      'Resolve to approve and begin TDD implementation.'
+    ].join('\n'),
     title: 'Plan Approval Gate',
     context: {
       runId: ctx.runId,

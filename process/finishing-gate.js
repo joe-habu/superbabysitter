@@ -63,36 +63,33 @@ export async function finishingGate(inputs, ctx, attempt = 1) {
           `Tests still failing after ${MAX_FINISH_ATTEMPTS} debug/fix cycles.`,
           '',
           `Results: ${finalTests.passed} passed, ${finalTests.failed} failed out of ${finalTests.total}`,
-          finalTests.failureDetails ? `Failures: ${finalTests.failureDetails.substring(0, 300)}` : '',
+          finalTests.failureDetails ? `Failures: ${finalTests.failureDetails.substring(0, 300)}` : `${finalTests.failed} test(s) failed`,
           '',
-          'Options:',
-          '1. Provide guidance and retry',
-          '2. Accept current state (some tests failing)',
-          '3. Abort the run',
+          'Resolve this breakpoint to accept the current state and continue.',
+          'To abort, leave the breakpoint unresolved and cancel the run.'
         ].join('\n'),
         title: 'Finishing Gate Escalation',
         context: { runId: ctx.runId }
       });
+      // BUG-1 fix: return after escalation to prevent fall-through to completion options
+      return { testResult: finalTests };
     } else {
+      const details = finalTests.failureDetails || finalTests.output || `${finalTests.failed} test(s) failed out of ${finalTests.total}`;
       ctx.log(`Tests failing: ${finalTests.failed} failures. Triggering debugging phase.`);
-      await debuggingPhase(ctx, `Test failures: ${finalTests.failureDetails}`);
+      await debuggingPhase(ctx, `Test failures: ${details}`);
 
       // Re-run tests after fix
       return await finishingGate(inputs, ctx, attempt + 1);
     }
   }
 
-  // Tests pass - present 4 options
+  // Tests pass - present completion gate
   await ctx.breakpoint({
     question: [
       `Implementation complete. Tests: ${finalTests.passed}/${finalTests.total} passing.`,
       '',
-      '1. Merge back to base branch locally',
-      '2. Push and create a Pull Request',
-      '3. Keep the branch as-is (handle later)',
-      '4. Discard this work',
-      '',
-      'Which option?'
+      'Resolve this breakpoint to finish the run.',
+      'Post-run: merge, create PR, or keep branch manually.'
     ].join('\n'),
     title: 'Finishing Gate',
     context: {

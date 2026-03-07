@@ -41,14 +41,15 @@ Without this, files imported from outside `.a5c/` will fail with ERR_REQUIRE_ESM
 |------|-------|---------|----------|
 | `process/design-gate.js` | 1 | `designGate()`, `contextExplorerTask`, `designProposalTask` | No implementation without approved design |
 | `process/planning-gate.js` | 2 | `planningGate()`, `planWriterTask`, `planVerifierTask` | No code without bite-sized TDD plan |
-| `process/tdd-implementation-loop.js` | 3 | `tddImplementationLoop()`, `tddImplementerTask`, `specComplianceReviewerTask`, `codeQualityReviewerTask` | No production code without failing test first; Do not trust reports; Spec before quality; Accumulate build manifest across tasks |
+| `process/subagent-tdd-loop.js` | 3 | `subagentTddLoop()`, `subagentImplementerTask`, `subagentFixerTask`, `subagentSpecReviewerTask`, `subagentQualityReviewerTask` | No production code without failing test first; Do not trust reports; Spec before quality; Accumulate build manifest across tasks |
+| `process/build-manifest.js` | 3 (shared) | `createEmptyManifest()`, `addTaskToManifest()`, `writeManifestMarkdown()`, `condensedManifestForPrompt()` | Build manifest functions shared across TDD loops |
 | `process/verification-gate.js` | 4 | `verificationGate()`, `verificationTask` | No completion claims without fresh verification evidence |
 | `process/debugging-phase.js` | 5 | `debuggingPhase(ctx, issue, attempt?)`, `rootCauseInvestigationTask`, `patternAnalysisTask`, `hypothesisTestingTask` | No fixes without root cause investigation first; Max 3 debug attempts before escalation |
 | `process/finishing-gate.js` | 6 | `finishingGate(inputs, ctx, attempt?)`, `testRunnerTask` | Verify tests pass before presenting finish options; Max 3 test/debug cycles before escalation |
 
 ### Dependencies Between Phases
 
-- `debugging-phase.js` imports `tddImplementerTask` from `tdd-implementation-loop.js` (for TDD fix after root cause confirmed)
+- `debugging-phase.js` imports `subagentImplementerTask` from `subagent-tdd-loop.js` (for TDD fix after root cause confirmed)
 - `finishing-gate.js` imports `debuggingPhase` from `debugging-phase.js` (for auto-debugging when tests fail)
 - `quality-gated-development.js` imports all 6 phases
 
@@ -70,7 +71,7 @@ The TDD implementation loop maintains a cumulative **Build Manifest** that grows
 
 **Crash resilience:** The markdown file persists on disk. If a run crashes mid-loop, the manifest survives for the next attempt.
 
-**Return value:** `tddImplementationLoop()` returns `{ completedTasks, manifest }` -- the manifest is available to downstream phases (verification, debugging, finishing).
+**Return value:** `subagentTddLoop()` returns `{ completedTasks, manifest }` -- the manifest is available to downstream phases (verification, debugging, finishing).
 
 ## Usage
 
@@ -85,13 +86,13 @@ babysitter run:create --entry process/quality-gated-development.js
 ```javascript
 import { designGate } from './design-gate.js';
 import { planningGate } from './planning-gate.js';
-import { tddImplementationLoop } from './tdd-implementation-loop.js';
+import { subagentTddLoop } from './subagent-tdd-loop.js';
 
 export async function process(inputs, ctx) {
   // Use only the phases you need
   const { designResult } = await designGate({ feature: inputs.feature, codebasePath: '.' }, ctx);
   const { planResult } = await planningGate({ feature: inputs.feature, designResult }, ctx);
-  const { completedTasks } = await tddImplementationLoop(planResult.tasks, ctx);
+  const { completedTasks } = await subagentTddLoop(planResult.tasks, ctx);
 
   return { success: true, tasksCompleted: completedTasks.length };
 }
@@ -100,11 +101,11 @@ export async function process(inputs, ctx) {
 ### Using Task Definitions Directly
 
 ```javascript
-import { tddImplementerTask, specComplianceReviewerTask } from './tdd-implementation-loop.js';
+import { subagentImplementerTask, subagentSpecReviewerTask } from './subagent-tdd-loop.js';
 import { verificationTask } from './verification-gate.js';
 
 // Use individual task definitions in your own orchestration logic
-const result = await ctx.task(tddImplementerTask, {
+const result = await ctx.task(subagentImplementerTask, {
   taskNumber: 1,
   taskName: 'My custom task',
   taskDescription: 'Full task description here',

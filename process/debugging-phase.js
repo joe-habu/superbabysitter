@@ -6,7 +6,7 @@
  */
 
 import { defineTask } from '@a5c-ai/babysitter-sdk';
-import { tddImplementerTask } from './tdd-implementation-loop.js';
+import { subagentImplementerTask } from './subagent-tdd-loop.js';
 
 // === TASK DEFINITIONS ===
 
@@ -137,7 +137,7 @@ export async function debuggingPhase(ctx, issue, attempt = 1) {
 
   // Phase 4: Fix implementation (only after root cause confirmed)
   if (hypothesis.confirmed) {
-    const fixResult = await ctx.task(tddImplementerTask, {
+    const fixResult = await ctx.task(subagentImplementerTask, {
       taskNumber: 0,
       taskName: `Fix: ${issue.substring(0, 40)}`,
       taskDescription: `Root cause: ${rootCause.hypothesis}\nFix: ${hypothesis.fix}`,
@@ -161,10 +161,8 @@ export async function debuggingPhase(ctx, issue, attempt = 1) {
           `Issue: ${issue.substring(0, 200)}`,
           `Last hypothesis: ${hypothesis.hypothesis}`,
           '',
-          'Options:',
-          '1. Provide additional context or hints for another attempt',
-          '2. Skip this issue and continue',
-          '3. Abort the run',
+          'Resolve this breakpoint to skip this issue and continue.',
+          'To abort, leave the breakpoint unresolved and cancel the run.'
         ].join('\n'),
         title: 'Debugging Escalation',
         context: { runId: ctx.runId }

@@ -68,10 +68,19 @@ export async function verificationGate(inputs, ctx) {
     ]
   });
 
-  // HARD GATE: Human reviews verification evidence
+  // HARD GATE: Human reviews verification evidence quality
   await ctx.breakpoint({
-    question: 'Review verification report. All requirements verified with evidence?',
-    title: 'Verification Evidence Gate',
+    question: [
+      'Review verification evidence quality.',
+      '',
+      `Result: ${verificationResult.passed ? 'ALL PASS' : 'FAILURES DETECTED'}`,
+      `Summary: ${verificationResult.summary || 'See artifacts/verification-report.md'}`,
+      '',
+      verificationResult.passed
+        ? 'Resolve to proceed to finishing gate.'
+        : 'Resolve to proceed to debugging phase for failing requirements.'
+    ].join('\n'),
+    title: 'Verification Evidence Review',
     context: {
       runId: ctx.runId,
       files: [{ path: 'artifacts/verification-report.md', format: 'markdown' }]

@@ -54,7 +54,8 @@ npm install
 |------|-------|---------|----------|
 | `process/design-gate.js` | 1 | `designGate()`, `contextExplorerTask`, `designProposalTask` | No implementation without approved design |
 | `process/planning-gate.js` | 2 | `planningGate()`, `planWriterTask`, `planVerifierTask` | No code without bite-sized TDD plan |
-| `process/tdd-implementation-loop.js` | 3 | `tddImplementationLoop()`, `tddImplementerTask`, `specComplianceReviewerTask`, `codeQualityReviewerTask` | No production code without failing test first |
+| `process/subagent-tdd-loop.js` | 3 | `subagentTddLoop()`, `subagentImplementerTask`, `subagentFixerTask`, `subagentSpecReviewerTask`, `subagentQualityReviewerTask` | No production code without failing test first |
+| `process/build-manifest.js` | 3 (shared) | `createEmptyManifest()`, `addTaskToManifest()`, `writeManifestMarkdown()`, `condensedManifestForPrompt()` | Build manifest functions shared across TDD loops |
 | `process/verification-gate.js` | 4 | `verificationGate()`, `verificationTask` | No completion claims without fresh verification evidence |
 | `process/debugging-phase.js` | 5 | `debuggingPhase()`, `rootCauseInvestigationTask`, `patternAnalysisTask`, `hypothesisTestingTask` | No fixes without root cause investigation first |
 | `process/finishing-gate.js` | 6 | `finishingGate()`, `testRunnerTask` | Verify tests pass before presenting finish options |
@@ -65,7 +66,7 @@ npm install
 
 ### Dependencies Between Phases
 
-- `debugging-phase.js` imports `tddImplementerTask` from `tdd-implementation-loop.js`
+- `debugging-phase.js` imports `subagentImplementerTask` from `subagent-tdd-loop.js`
 - `finishing-gate.js` imports `debuggingPhase` from `debugging-phase.js`
 - `quality-gated-development.js` imports all 6 phases
 
@@ -86,12 +87,12 @@ babysitter run:create --entry process/quality-gated-development.js
 ```javascript
 import { designGate } from './design-gate.js';
 import { planningGate } from './planning-gate.js';
-import { tddImplementationLoop } from './tdd-implementation-loop.js';
+import { subagentTddLoop } from './subagent-tdd-loop.js';
 
 export async function process(inputs, ctx) {
   const { designResult } = await designGate({ feature: inputs.feature, codebasePath: '.' }, ctx);
   const { planResult } = await planningGate({ feature: inputs.feature, designResult }, ctx);
-  const { completedTasks } = await tddImplementationLoop(planResult.tasks, ctx);
+  const { completedTasks } = await subagentTddLoop(planResult.tasks, ctx);
 
   return { success: true, tasksCompleted: completedTasks.length };
 }
@@ -100,10 +101,10 @@ export async function process(inputs, ctx) {
 ### Using Task Definitions Directly
 
 ```javascript
-import { tddImplementerTask, specComplianceReviewerTask } from './tdd-implementation-loop.js';
+import { subagentImplementerTask, subagentSpecReviewerTask } from './subagent-tdd-loop.js';
 import { verificationTask } from './verification-gate.js';
 
-const result = await ctx.task(tddImplementerTask, {
+const result = await ctx.task(subagentImplementerTask, {
   taskNumber: 1,
   taskName: 'My custom task',
   taskDescription: 'Full task description here',

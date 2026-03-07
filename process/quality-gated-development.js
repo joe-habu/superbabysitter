@@ -7,7 +7,7 @@
 
 import { designGate, contextExplorerTask, designProposalTask } from './design-gate.js';
 import { planningGate, planWriterTask, planVerifierTask } from './planning-gate.js';
-import { tddImplementationLoop, tddImplementerTask, specComplianceReviewerTask, codeQualityReviewerTask } from './tdd-implementation-loop.js';
+import { subagentTddLoop, subagentImplementerTask, subagentFixerTask, subagentSpecReviewerTask, subagentQualityReviewerTask } from './subagent-tdd-loop.js';
 import { verificationGate, verificationTask } from './verification-gate.js';
 import { debuggingPhase, rootCauseInvestigationTask, patternAnalysisTask, hypothesisTestingTask } from './debugging-phase.js';
 import { finishingGate, testRunnerTask } from './finishing-gate.js';
@@ -16,7 +16,7 @@ import { finishingGate, testRunnerTask } from './finishing-gate.js';
 export {
   contextExplorerTask, designProposalTask,
   planWriterTask, planVerifierTask,
-  tddImplementerTask, specComplianceReviewerTask, codeQualityReviewerTask,
+  subagentImplementerTask, subagentFixerTask, subagentSpecReviewerTask, subagentQualityReviewerTask,
   verificationTask,
   rootCauseInvestigationTask, patternAnalysisTask, hypothesisTestingTask,
   testRunnerTask
@@ -24,7 +24,7 @@ export {
 
 // Re-export all phase functions for consumers that need them
 export {
-  designGate, planningGate, tddImplementationLoop,
+  designGate, planningGate, subagentTddLoop,
   verificationGate, debuggingPhase, finishingGate
 };
 
@@ -48,7 +48,7 @@ export async function process(inputs, ctx) {
   //   (superpowers:subagent-driven-development + test-driven-development)
   // ========================================================================
 
-  const { completedTasks } = await tddImplementationLoop(planResult.tasks, ctx);
+  const { completedTasks } = await subagentTddLoop(planResult.tasks, ctx);
 
   // ========================================================================
   // PHASE 4: VERIFICATION GATE (superpowers:verification-before-completion)
@@ -67,16 +67,11 @@ export async function process(inputs, ctx) {
       await debuggingPhase(ctx, `Requirement failed: ${failedReq.requirement}\nEvidence: ${failedReq.output}`);
     }
 
-    // Re-verify after fixes
-    await ctx.task(verificationTask, {
-      feature,
-      plan: planResult,
-      instructions: [
-        'IRON LAW: No completion claims without fresh verification evidence.',
-        'Re-run ALL verifications after debugging fixes.',
-        'Write updated report to artifacts/verification-report.md'
-      ]
-    });
+    // Re-verify after fixes - route through full verification gate with breakpoint
+    const reVerification = await verificationGate({ feature, planResult }, ctx);
+    if (!reVerification.verificationResult.passed) {
+      ctx.log('Re-verification still has failures. Finishing gate will handle remaining issues via test/debug cycle.');
+    }
   }
 
   // ========================================================================
