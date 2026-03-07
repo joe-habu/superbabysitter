@@ -7,6 +7,7 @@
 
 import { defineTask } from '@a5c-ai/babysitter-sdk';
 import { debuggingPhase } from './debugging-phase.js';
+import { mcpStateInstructions } from './mcp-state-helpers.js';
 
 // === TASK DEFINITIONS ===
 
@@ -20,11 +21,11 @@ export const testRunnerTask = defineTask('test-runner', (args, taskCtx) => ({
       task: 'Run full test suite and report results with evidence',
       context: {},
       instructions: args.instructions,
-      outputFormat: 'JSON with allPassing (boolean), passed (number), failed (number), total (number), output (string), failures (string if any)'
+      outputFormat: 'JSON with allPassing (boolean), passed (number), failed (number), total (number), output (string), failureDetails (string if any)'
     },
     outputSchema: {
       type: 'object',
-      required: ['allPassing', 'passed', 'total'],
+      required: ['allPassing', 'passed', 'failed', 'total'],
       properties: {
         allPassing: { type: 'boolean' },
         passed: { type: 'number' },
@@ -46,18 +47,30 @@ export const testRunnerTask = defineTask('test-runner', (args, taskCtx) => ({
 const MAX_FINISH_ATTEMPTS = 3;
 
 export async function finishingGate(inputs, ctx, attempt = 1) {
-  ctx.log(`Phase 6: Finishing Gate (attempt ${attempt}/${MAX_FINISH_ATTEMPTS})`);
+  const log = (ctx.log || (() => {})).bind(ctx);
+  log(`Phase 6: Finishing Gate (attempt ${attempt}/${MAX_FINISH_ATTEMPTS})`);
+
+  const runId = inputs.runId;
+  const mcpInstructions = runId
+    ? mcpStateInstructions({
+        runId,
+        phase: 'finishing',
+        resultType: 'test_run',
+        queryInstructions: { getRunSummary: true }
+      })
+    : [];
 
   const finalTests = await ctx.task(testRunnerTask, {
     instructions: [
       'IRON LAW: No completion claims without fresh verification evidence.',
-      'Run FULL test suite. Read FULL output. Report exact numbers.'
+      'Run FULL test suite. Read FULL output. Report exact numbers.',
+      ...mcpInstructions
     ]
   });
 
   if (!finalTests.allPassing) {
     if (attempt >= MAX_FINISH_ATTEMPTS) {
-      ctx.log(`Finishing gate exhausted ${MAX_FINISH_ATTEMPTS} test/debug cycles. Escalating to human.`);
+      log(`Finishing gate exhausted ${MAX_FINISH_ATTEMPTS} test/debug cycles. Escalating to human.`);
       await ctx.breakpoint({
         question: [
           `Tests still failing after ${MAX_FINISH_ATTEMPTS} debug/fix cycles.`,
@@ -69,14 +82,13 @@ export async function finishingGate(inputs, ctx, attempt = 1) {
           'To abort, leave the breakpoint unresolved and cancel the run.'
         ].join('\n'),
         title: 'Finishing Gate Escalation',
-        context: { runId: ctx.runId }
+        context: { runId: runId || ctx.runId }
       });
-      // BUG-1 fix: return after escalation to prevent fall-through to completion options
       return { testResult: finalTests };
     } else {
       const details = finalTests.failureDetails || finalTests.output || `${finalTests.failed} test(s) failed out of ${finalTests.total}`;
-      ctx.log(`Tests failing: ${finalTests.failed} failures. Triggering debugging phase.`);
-      await debuggingPhase(ctx, `Test failures: ${details}`);
+      log(`Tests failing: ${finalTests.failed} failures. Triggering debugging phase.`);
+      await debuggingPhase(ctx, `Test failures: ${details}`, 1, runId);
 
       // Re-run tests after fix
       return await finishingGate(inputs, ctx, attempt + 1);
@@ -88,12 +100,17 @@ export async function finishingGate(inputs, ctx, attempt = 1) {
     question: [
       `Implementation complete. Tests: ${finalTests.passed}/${finalTests.total} passing.`,
       '',
-      'Resolve this breakpoint to finish the run.',
-      'Post-run: merge, create PR, or keep branch manually.'
+      'Choose a completion option:',
+      '  1. Merge locally - merge this branch into the base branch now',
+      '  2. Push + PR - push to remote and create a pull request for team review',
+      '  3. Keep branch - leave the branch as-is for manual review or continued work',
+      '  4. Discard - delete the branch and all changes (irreversible)',
+      '',
+      'Resolve this breakpoint to finish the run.'
     ].join('\n'),
-    title: 'Finishing Gate',
+    title: 'Finishing Gate - Completion Options',
     context: {
-      runId: ctx.runId,
+      runId: runId || ctx.runId,
       files: [
         { path: 'artifacts/verification-report.md', format: 'markdown' },
         { path: 'artifacts/plan.md', format: 'markdown' }

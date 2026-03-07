@@ -6,6 +6,7 @@
  */
 
 import { defineTask } from '@a5c-ai/babysitter-sdk';
+import { mcpStateInstructions } from './mcp-state-helpers.js';
 
 // === TASK DEFINITIONS ===
 
@@ -78,11 +79,31 @@ export const planVerifierTask = defineTask('plan-verifier', (args, taskCtx) => (
 // === PHASE FUNCTION ===
 
 export async function planningGate(inputs, ctx) {
-  ctx.log('Phase 2: Planning Gate');
+  const log = (ctx.log || (() => {})).bind(ctx);
+  log('Phase 2: Planning Gate');
 
+  const runId = inputs.runId;
   let planResult;
-  let planVerifyResult;
+  let planVerifyResult = { passed: false, gaps: ['No verification run yet'] };
   const MAX_PLAN_ATTEMPTS = 2;
+
+  const planMcpInstructions = runId
+    ? mcpStateInstructions({
+        runId,
+        phase: 'planning',
+        resultType: 'plan',
+        queryInstructions: { searchPhase: 'design', getRunSummary: true }
+      })
+    : [];
+
+  const verifyMcpInstructions = runId
+    ? mcpStateInstructions({
+        runId,
+        phase: 'planning',
+        resultType: 'verification',
+        queryInstructions: { searchPhase: 'planning' }
+      })
+    : [];
 
   for (let attempt = 1; attempt <= MAX_PLAN_ATTEMPTS; attempt++) {
     const additionalInstructions = (attempt > 1 && planVerifyResult)
@@ -99,7 +120,9 @@ export async function planningGate(inputs, ctx) {
         'Include exact file paths, complete code, exact commands with expected output',
         'DRY. YAGNI. TDD. Frequent commits.',
         'Write plan to artifacts/plan.md',
-        ...additionalInstructions
+        ...additionalInstructions,
+        ...planMcpInstructions,
+        ...(runId ? [`Also call save_artifact(run_id=${runId}, name="plan.md", content=<the plan doc>)`] : [])
       ]
     });
 
@@ -112,13 +135,14 @@ export async function planningGate(inputs, ctx) {
         'Check: Is every task truly bite-sized?',
         'Check: Does every task follow TDD?',
         'Check: Are file paths exact and complete?',
-        'Write verification to artifacts/plan-verification.md'
+        'Write verification to artifacts/plan-verification.md',
+        ...verifyMcpInstructions
       ]
     });
 
     if (planVerifyResult.passed) break;
     if (attempt < MAX_PLAN_ATTEMPTS) {
-      ctx.log(`Plan verification failed (attempt ${attempt}). Revising with gaps: ${planVerifyResult.gaps.join(', ')}`);
+      log(`Plan verification failed (attempt ${attempt}). Revising with gaps: ${planVerifyResult.gaps.join(', ')}`);
     }
   }
 
@@ -134,7 +158,7 @@ export async function planningGate(inputs, ctx) {
     ].join('\n'),
     title: 'Plan Approval Gate',
     context: {
-      runId: ctx.runId,
+      runId: runId || ctx.runId,
       files: [
         { path: 'artifacts/plan.md', format: 'markdown' },
         { path: 'artifacts/plan-verification.md', format: 'markdown' }

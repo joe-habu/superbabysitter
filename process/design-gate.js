@@ -6,6 +6,7 @@
  */
 
 import { defineTask } from '@a5c-ai/babysitter-sdk';
+import { mcpStateInstructions } from './mcp-state-helpers.js';
 
 // === TASK DEFINITIONS ===
 
@@ -22,9 +23,10 @@ export const contextExplorerTask = defineTask('context-explorer', (args, taskCtx
         'Check project files, docs, recent commits',
         'Identify relevant existing patterns and conventions',
         'Note dependencies, constraints, and integration points',
-        'Summarize findings for design proposal'
+        'Summarize findings for design proposal',
+        ...(args.mcpInstructions || [])
       ],
-      outputFormat: 'JSON with patterns, conventions, constraints, integrationPoints'
+      outputFormat: 'JSON with patterns, conventions, constraints, integrationPoints, runId (if you created a new run)'
     },
     outputSchema: {
       type: 'object',
@@ -33,7 +35,8 @@ export const contextExplorerTask = defineTask('context-explorer', (args, taskCtx
         patterns: { type: 'array', items: { type: 'string' } },
         conventions: { type: 'array', items: { type: 'string' } },
         constraints: { type: 'array', items: { type: 'string' } },
-        integrationPoints: { type: 'array', items: { type: 'string' } }
+        integrationPoints: { type: 'array', items: { type: 'string' } },
+        runId: { type: 'number' }
       }
     }
   },
@@ -84,12 +87,40 @@ export const designProposalTask = defineTask('design-proposal', (args, taskCtx) 
 // === PHASE FUNCTION ===
 
 export async function designGate(inputs, ctx) {
-  ctx.log('Phase 1: Design Gate');
+  const log = (ctx.log || (() => {})).bind(ctx);
+  log('Phase 1: Design Gate');
+
+  // Create MCP run for persistent state tracking
+  const runId = inputs.runId || null;
+  const mcpCreateInstructions = runId ? [] : [
+    '',
+    '--- MCP STATE MANAGEMENT ---',
+    `FIRST: Call create_run(feature="${inputs.feature}", project="${inputs.project || inputs.codebasePath || '.'}") to start tracking this workflow.`,
+    'Record the returned run_id - it will be used throughout this workflow.',
+    'AFTER COMPLETING: Call record_result with run_id, phase="design", result_type="context_exploration"',
+    '--- END MCP STATE ---',
+    ''
+  ];
 
   const contextResult = await ctx.task(contextExplorerTask, {
     feature: inputs.feature,
-    codebasePath: inputs.codebasePath
+    codebasePath: inputs.codebasePath,
+    mcpInstructions: runId
+      ? mcpStateInstructions({ runId, phase: 'design', resultType: 'context_exploration' })
+      : mcpCreateInstructions
   });
+
+  // Extract runId from context result if it was created by the agent
+  const effectiveRunId = runId || contextResult.runId || ctx.runId;
+
+  const designMcpInstructions = effectiveRunId
+    ? mcpStateInstructions({
+        runId: effectiveRunId,
+        phase: 'design',
+        resultType: 'design_proposal',
+        queryInstructions: { searchPhase: 'design' }
+      })
+    : [];
 
   const designResult = await ctx.task(designProposalTask, {
     feature: inputs.feature,
@@ -99,7 +130,9 @@ export async function designGate(inputs, ctx) {
       'Explore project context: files, docs, recent commits',
       'Propose 2-3 approaches with trade-offs and your recommendation',
       'Present design covering: architecture, components, data flow, error handling, testing',
-      'Write design to artifacts/design.md'
+      'Write design to artifacts/design.md',
+      ...designMcpInstructions,
+      ...(effectiveRunId ? [`Also call save_artifact(run_id=${effectiveRunId}, name="design.md", content=<the design doc>)`] : [])
     ]
   });
 
@@ -108,10 +141,10 @@ export async function designGate(inputs, ctx) {
     question: `Review the proposed design for "${inputs.feature}". Approve to proceed to planning?`,
     title: 'Design Approval Gate',
     context: {
-      runId: ctx.runId,
+      runId: effectiveRunId || ctx.runId,
       files: [{ path: 'artifacts/design.md', format: 'markdown' }]
     }
   });
 
-  return { contextResult, designResult };
+  return { contextResult, designResult, runId: effectiveRunId };
 }

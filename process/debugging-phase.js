@@ -7,6 +7,7 @@
 
 import { defineTask } from '@a5c-ai/babysitter-sdk';
 import { subagentImplementerTask } from './subagent-tdd-loop.js';
+import { mcpDebuggingInstructions, mcpFixInstructions } from './mcp-state-helpers.js';
 
 // === TASK DEFINITIONS ===
 
@@ -100,8 +101,13 @@ export const hypothesisTestingTask = defineTask('hypothesis-testing', (args, tas
 
 const MAX_DEBUG_ATTEMPTS = 3;
 
-export async function debuggingPhase(ctx, issue, attempt = 1) {
-  ctx.log(`Phase 5: Debugging Phase (attempt ${attempt}/${MAX_DEBUG_ATTEMPTS})`);
+export async function debuggingPhase(ctx, issue, attempt = 1, runId = null) {
+  const log = (ctx.log || (() => {})).bind(ctx);
+  log(`Phase 5: Debugging Phase (attempt ${attempt}/${MAX_DEBUG_ATTEMPTS})`);
+
+  const mcpRootCauseInstr = runId ? mcpDebuggingInstructions(runId, 'root_cause_investigation') : [];
+  const mcpPatternInstr = runId ? mcpDebuggingInstructions(runId, 'pattern_analysis') : [];
+  const mcpHypothesisInstr = runId ? mcpDebuggingInstructions(runId, 'hypothesis_test') : [];
 
   // Phase 1: Root cause investigation (REQUIRED before any fix)
   const rootCause = await ctx.task(rootCauseInvestigationTask, {
@@ -113,7 +119,8 @@ export async function debuggingPhase(ctx, issue, attempt = 1) {
       '2. Reproduce consistently',
       '3. Check recent changes - git diff',
       '4. Trace data flow backward to source',
-      'Report hypothesis with evidence, NOT a fix'
+      'Report hypothesis with evidence, NOT a fix',
+      ...mcpRootCauseInstr
     ]
   });
 
@@ -122,7 +129,8 @@ export async function debuggingPhase(ctx, issue, attempt = 1) {
     issue, rootCause,
     instructions: [
       'Find working examples, compare, list differences',
-      'Understand dependencies and assumptions'
+      'Understand dependencies and assumptions',
+      ...mcpPatternInstr
     ]
   });
 
@@ -131,29 +139,32 @@ export async function debuggingPhase(ctx, issue, attempt = 1) {
     issue, rootCause, pattern,
     instructions: [
       'Form SINGLE hypothesis. Test with SMALLEST change.',
-      'ONE variable at a time. Report confirmed or not.'
+      'ONE variable at a time. Report confirmed or not.',
+      ...mcpHypothesisInstr
     ]
   });
 
   // Phase 4: Fix implementation (only after root cause confirmed)
   if (hypothesis.confirmed) {
+    const mcpFixInstrs = runId ? mcpFixInstructions(runId) : [];
     const fixResult = await ctx.task(subagentImplementerTask, {
       taskNumber: 0,
       taskName: `Fix: ${issue.substring(0, 40)}`,
-      taskDescription: `Root cause: ${rootCause.hypothesis}\nFix: ${hypothesis.fix}`,
+      taskDescription: `Root cause: ${rootCause.hypothesis}\nFix: ${hypothesis.fix || '(no specific fix suggested -- apply root cause analysis)'}`,
       sceneContext: 'Debugging fix',
       instructions: [
         'IRON LAW: No production code without a failing test first.',
         'Create failing regression test. Verify FAILS.',
         'Implement fix for ROOT CAUSE. Verify PASSES.',
-        'Run full suite. Verify nothing else broke. Commit.'
+        'Run full suite. Verify nothing else broke. Commit.',
+        ...mcpFixInstrs
       ]
     });
     return fixResult;
   } else {
     // Hypothesis not confirmed - retry with guard
     if (attempt >= MAX_DEBUG_ATTEMPTS) {
-      ctx.log(`Debugging exhausted ${MAX_DEBUG_ATTEMPTS} attempts. Escalating to human.`);
+      log(`Debugging exhausted ${MAX_DEBUG_ATTEMPTS} attempts. Escalating to human.`);
       await ctx.breakpoint({
         question: [
           `Debugging failed to confirm a root cause after ${MAX_DEBUG_ATTEMPTS} attempts.`,
@@ -165,11 +176,11 @@ export async function debuggingPhase(ctx, issue, attempt = 1) {
           'To abort, leave the breakpoint unresolved and cancel the run.'
         ].join('\n'),
         title: 'Debugging Escalation',
-        context: { runId: ctx.runId }
+        context: { runId: runId || ctx.runId }
       });
       return undefined;
     }
-    ctx.log('Hypothesis not confirmed. Returning to root cause investigation.');
-    return await debuggingPhase(ctx, issue, attempt + 1);
+    log('Hypothesis not confirmed. Returning to root cause investigation.');
+    return await debuggingPhase(ctx, issue, attempt + 1, runId);
   }
 }

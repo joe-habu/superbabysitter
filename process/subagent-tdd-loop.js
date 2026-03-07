@@ -2,11 +2,11 @@
  * @process superbabysitter/subagent-tdd-loop
  * @description Phase 3: Subagent TDD Implementation Loop - merges babysitter orchestration with superpowers subagent-driven-development pattern. Each task gets scene-setting context, dedicated fixer subagents, and enhanced reviewer prompts that distrust implementer reports.
  * @inputs { tasks: Array<{name, fullText, context}> }
- * @outputs { completedTasks: Array<{name, specAttempts, qualityAttempts}>, manifest }
+ * @outputs { completedTasks: Array<{name, specAttempts, qualityAttempts}> }
  */
 
 import { defineTask } from '@a5c-ai/babysitter-sdk';
-import { createEmptyManifest, addTaskToManifest, writeManifestMarkdown, condensedManifestForPrompt } from './build-manifest.js';
+import { mcpImplementerInstructions, mcpReviewerInstructions, mcpTddFixerInstructions } from './mcp-state-helpers.js';
 
 // === INSTRUCTION CONSTANTS ===
 
@@ -42,13 +42,13 @@ const specReviewerInstructions = [
   'Check for MISSING requirements: Did they implement everything requested? Are there requirements they skipped?',
   'Check for EXTRA work: Did they build things not requested? Did they over-engineer?',
   'Check for MISUNDERSTANDINGS: Did they interpret requirements differently than intended? Did they solve the wrong problem?',
-  'CONTEXT: buildManifest shows what prior tasks built. Verify this task is consistent with established patterns.',
+  'CONTEXT: Query MCP state (search_results with result_type="implementation" and result_type="decision") to see what prior tasks built. Verify this task is consistent with established patterns.',
   'Report: PASS or FAIL with specific issues and file:line references for each issue found.'
 ];
 
 const qualityReviewerInstructions = [
   'IRON LAW: Do NOT trust the implementer report. Read actual code.',
-  'CONTEXT: buildManifest shows established patterns and architectural decisions. Flag inconsistencies with prior decisions.',
+  'CONTEXT: Query MCP state (search_results with result_type="decision") to see established patterns and architectural decisions. Flag inconsistencies with prior decisions.',
   'Review: code cleanliness, naming accuracy (names match what things do, not how they work), maintainability, test quality (tests verify behavior, not mock behavior).',
   'Classify issues by severity: Critical (breaks correctness, security, or architecture), Important (significant quality concern), Minor (style, preference).',
   'Only FAIL for Critical or Important issues. Minor issues should be noted but not block progress.',
@@ -56,8 +56,10 @@ const qualityReviewerInstructions = [
 ];
 
 // === HELPER FUNCTIONS ===
+// buildMinimalSceneContext provides position/upcoming task context.
+// MCP state handles prior task context -- agents call get_run_summary() and search_results().
 
-function buildSceneContext(task, taskIndex, allTasks, manifest) {
+function buildMinimalSceneContext(task, taskIndex, allTasks) {
   const lines = [];
   const taskNumber = taskIndex + 1;
   const totalTasks = allTasks.length;
@@ -66,39 +68,11 @@ function buildSceneContext(task, taskIndex, allTasks, manifest) {
   lines.push(`You are implementing Task ${taskNumber} of ${totalTasks}: "${task.name}"`);
   lines.push('');
 
-  // Completed tasks
-  if (taskIndex > 0) {
-    lines.push('## Completed Tasks');
-    for (let i = 0; i < taskIndex; i++) {
-      const completed = manifest.tasks[i];
-      if (completed) {
-        lines.push(`- Task ${i + 1}: ${completed.name} (files: ${(completed.filesChanged || []).join(', ') || 'none'})`);
-        if (completed.architecturalDecisions && completed.architecturalDecisions.length > 0) {
-          for (const decision of completed.architecturalDecisions) {
-            lines.push(`  - Decision: ${decision}`);
-          }
-        }
-      }
-    }
-    lines.push('');
-  }
-
-  // Upcoming tasks
+  // Upcoming tasks (static - doesn't need MCP)
   if (taskIndex < totalTasks - 1) {
     lines.push('## Upcoming Tasks (do NOT implement their work)');
     for (let i = taskIndex + 1; i < totalTasks; i++) {
       lines.push(`- Task ${i + 1}: ${allTasks[i].name}`);
-    }
-    lines.push('');
-  }
-
-  // Architectural decisions from manifest
-  const allDecisions = manifest.tasks.flatMap(t => t.architecturalDecisions || []);
-  if (allDecisions.length > 0) {
-    lines.push('## Established Architectural Decisions');
-    lines.push('Follow these decisions made by prior tasks:');
-    for (const decision of allDecisions) {
-      lines.push(`- ${decision}`);
     }
     lines.push('');
   }
@@ -110,17 +84,11 @@ function buildSceneContext(task, taskIndex, allTasks, manifest) {
     lines.push('');
   }
 
-  return lines.join('\n');
-}
+  lines.push('## Prior Tasks and Decisions');
+  lines.push('Query MCP state tools to see completed tasks and architectural decisions.');
+  lines.push('');
 
-function extractDependencies(task, manifest) {
-  if (manifest.tasks.length === 0) return null;
-  return manifest.tasks.map(t => ({
-    name: t.name,
-    filesChanged: t.filesChanged || [],
-    summary: t.summary || '',
-    architecturalDecisions: t.architecturalDecisions || []
-  }));
+  return lines.join('\n');
 }
 
 // === TASK DEFINITIONS ===
@@ -136,8 +104,7 @@ export const subagentImplementerTask = defineTask('subagent-implementer', (args,
       context: {
         taskDescription: args.taskDescription,
         sceneContext: args.sceneContext,
-        ...(args.dependencies ? { dependencies: args.dependencies } : {}),
-        ...(args.buildManifest ? { buildManifest: args.buildManifest } : {})
+        ...(args.dependencies ? { dependencies: args.dependencies } : {})
       },
       instructions: args.instructions,
       outputFormat: 'JSON with filesChanged, testResults, summary, concerns, architecturalDecisions, dependsOn, selfReviewFindings'
@@ -174,8 +141,7 @@ export const subagentFixerTask = defineTask('subagent-fixer', (args, taskCtx) =>
         originalTaskDescription: args.originalTaskDescription,
         priorImplementation: args.priorImplementation,
         reviewIssues: args.reviewIssues,
-        reviewType: args.reviewType,
-        ...(args.buildManifest ? { buildManifest: args.buildManifest } : {})
+        reviewType: args.reviewType
       },
       instructions: args.instructions,
       outputFormat: 'JSON with filesChanged, testResults, summary, concerns, architecturalDecisions, dependsOn, selfReviewFindings'
@@ -210,8 +176,7 @@ export const subagentSpecReviewerTask = defineTask('subagent-spec-reviewer', (ar
       task: 'Verify implementation matches specification exactly - nothing more, nothing less',
       context: {
         specification: args.specification,
-        implementerReport: args.implementerReport,
-        ...(args.buildManifest ? { buildManifest: args.buildManifest } : {})
+        implementerReport: args.implementerReport
       },
       instructions: args.instructions,
       outputFormat: 'JSON with passed (boolean), issues (array of strings), evidence (string)'
@@ -242,8 +207,7 @@ export const subagentQualityReviewerTask = defineTask('subagent-quality-reviewer
       task: 'Review implementation for code quality, maintainability, and test quality',
       context: {
         specification: args.specification,
-        implementerReport: args.implementerReport,
-        ...(args.buildManifest ? { buildManifest: args.buildManifest } : {})
+        implementerReport: args.implementerReport
       },
       instructions: args.instructions,
       outputFormat: 'JSON with passed (boolean), issues (array with severity), strengths (array)'
@@ -266,33 +230,33 @@ export const subagentQualityReviewerTask = defineTask('subagent-quality-reviewer
 
 // === PHASE FUNCTION ===
 
-export async function subagentTddLoop(tasks, ctx) {
-  ctx.log('Phase 3: Subagent TDD Implementation Loop');
+export async function subagentTddLoop(tasks, runId, ctx) {
+  const log = (ctx.log || (() => {})).bind(ctx);
+  log('Phase 3: Subagent TDD Implementation Loop');
 
   const completedTasks = [];
-  const manifest = createEmptyManifest();
 
   for (let i = 0; i < tasks.length; i++) {
     const task = tasks[i];
-    ctx.log(`Task ${i + 1}/${tasks.length}: ${task.name}`);
+    const taskNumber = i + 1;
+    log(`Task ${taskNumber}/${tasks.length}: ${task.name}`);
 
-    // Build rich scene context for this task
-    const sceneContext = buildSceneContext(task, i, tasks, manifest);
-    const dependencies = extractDependencies(task, manifest);
-    const condensedManifest = condensedManifestForPrompt(manifest);
+    // Build minimal scene context (position + upcoming tasks only)
+    // Agents query MCP for completed tasks, decisions, and dependencies
+    const sceneContext = buildMinimalSceneContext(task, i, tasks);
+    const mcpImplInstructions = runId ? mcpImplementerInstructions(runId, taskNumber, task.name) : [];
 
-    // 3a: TDD Implementation with scene-setting context
+    // 3a: TDD Implementation with MCP state access
     let implResult = await ctx.task(subagentImplementerTask, {
-      taskNumber: i + 1,
+      taskNumber,
       taskName: task.name,
       taskDescription: task.fullText,
       sceneContext,
-      dependencies,
-      buildManifest: condensedManifest,
-      instructions: implementerInstructions
+      instructions: [...implementerInstructions, ...mcpImplInstructions]
     });
 
     // 3b: Spec Compliance Review (MUST come first)
+    const mcpSpecInstructions = runId ? mcpReviewerInstructions(runId, taskNumber, task.name, 'spec') : [];
     let specPassed = false;
     let specAttempts = 0;
     while (!specPassed && specAttempts < 3) {
@@ -301,8 +265,7 @@ export async function subagentTddLoop(tasks, ctx) {
         taskName: task.name,
         specification: task.fullText,
         implementerReport: implResult,
-        buildManifest: condensedManifest,
-        instructions: specReviewerInstructions
+        instructions: [...specReviewerInstructions, ...mcpSpecInstructions]
       });
 
       if (specReview.passed) {
@@ -310,7 +273,7 @@ export async function subagentTddLoop(tasks, ctx) {
       } else if (specAttempts >= 3) {
         await ctx.breakpoint({
           question: [
-            `Spec compliance review failed 3 times for Task ${i + 1}: ${task.name}`,
+            `Spec compliance review failed 3 times for Task ${taskNumber}: ${task.name}`,
             '',
             'Latest issues:',
             ...specReview.issues.map(issue => `  - ${issue}`),
@@ -319,7 +282,7 @@ export async function subagentTddLoop(tasks, ctx) {
             'To abort, leave the breakpoint unresolved and cancel the run.'
           ].join('\n'),
           title: 'Spec Review Escalation',
-          context: { runId: ctx.runId }
+          context: { runId: runId || ctx.runId }
         });
         specPassed = true; // Human approved continuation
       } else {
@@ -330,13 +293,13 @@ export async function subagentTddLoop(tasks, ctx) {
           priorImplementation: implResult,
           reviewIssues: specReview.issues,
           reviewType: 'spec compliance',
-          buildManifest: condensedManifest,
-          instructions: fixerInstructions('spec compliance')
+          instructions: [...fixerInstructions('spec compliance'), ...(runId ? mcpTddFixerInstructions(runId, taskNumber, task.name, 'spec') : [])]
         });
       }
     }
 
     // 3c: Code Quality Review (ONLY after spec passes)
+    const mcpQualityInstructions = runId ? mcpReviewerInstructions(runId, taskNumber, task.name, 'quality') : [];
     let qualityPassed = false;
     let qualityAttempts = 0;
     while (!qualityPassed && qualityAttempts < 3) {
@@ -345,8 +308,7 @@ export async function subagentTddLoop(tasks, ctx) {
         taskName: task.name,
         specification: task.fullText,
         implementerReport: implResult,
-        buildManifest: condensedManifest,
-        instructions: qualityReviewerInstructions
+        instructions: [...qualityReviewerInstructions, ...mcpQualityInstructions]
       });
 
       if (qualityReview.passed) {
@@ -354,7 +316,7 @@ export async function subagentTddLoop(tasks, ctx) {
       } else if (qualityAttempts >= 3) {
         await ctx.breakpoint({
           question: [
-            `Code quality review failed 3 times for Task ${i + 1}: ${task.name}`,
+            `Code quality review failed 3 times for Task ${taskNumber}: ${task.name}`,
             '',
             'Latest issues:',
             ...qualityReview.issues.map(issue => `  - ${issue}`),
@@ -363,7 +325,7 @@ export async function subagentTddLoop(tasks, ctx) {
             'To abort, leave the breakpoint unresolved and cancel the run.'
           ].join('\n'),
           title: 'Quality Review Escalation',
-          context: { runId: ctx.runId }
+          context: { runId: runId || ctx.runId }
         });
         qualityPassed = true; // Human approved continuation
       } else {
@@ -374,28 +336,16 @@ export async function subagentTddLoop(tasks, ctx) {
           priorImplementation: implResult,
           reviewIssues: qualityReview.issues,
           reviewType: 'code quality',
-          buildManifest: condensedManifest,
-          instructions: fixerInstructions('code quality')
+          instructions: [...fixerInstructions('code quality'), ...(runId ? mcpTddFixerInstructions(runId, taskNumber, task.name, 'quality') : [])]
         });
       }
     }
 
-    // Accumulate manifest
-    const taskEntry = {
-      taskNumber: i + 1,
-      name: task.name,
-      filesChanged: implResult.filesChanged || [],
-      architecturalDecisions: implResult.architecturalDecisions || [],
-      dependsOn: implResult.dependsOn || [],
-      summary: implResult.summary || '',
-      concerns: implResult.concerns || []
-    };
-    addTaskToManifest(manifest, taskEntry);
-    writeManifestMarkdown(manifest, 'artifacts/build-manifest.md');
+    // State is recorded by agents via MCP tools - no manifest accumulation needed
 
     completedTasks.push({ name: task.name, specAttempts, qualityAttempts });
-    ctx.log(`Completed Task ${i + 1}/${tasks.length}: ${task.name}`);
+    log(`Completed Task ${taskNumber}/${tasks.length}: ${task.name}`);
   }
 
-  return { completedTasks, manifest };
+  return { completedTasks };
 }

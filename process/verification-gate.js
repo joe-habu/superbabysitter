@@ -6,6 +6,7 @@
  */
 
 import { defineTask } from '@a5c-ai/babysitter-sdk';
+import { mcpStateInstructions } from './mcp-state-helpers.js';
 
 // === TASK DEFINITIONS ===
 
@@ -51,7 +52,18 @@ export const verificationTask = defineTask('verification', (args, taskCtx) => ({
 // === PHASE FUNCTION ===
 
 export async function verificationGate(inputs, ctx) {
-  ctx.log('Phase 4: Verification Gate');
+  const log = (ctx.log || (() => {})).bind(ctx);
+  log('Phase 4: Verification Gate');
+
+  const runId = inputs.runId;
+  const mcpInstructions = runId
+    ? mcpStateInstructions({
+        runId,
+        phase: 'verification',
+        resultType: 'verification',
+        queryInstructions: { getRunSummary: true, searchPhase: 'tdd' }
+      })
+    : [];
 
   const verificationResult = await ctx.task(verificationTask, {
     feature: inputs.feature,
@@ -64,7 +76,9 @@ export async function verificationGate(inputs, ctx) {
       '  3. READ full output, check exit code',
       '  4. RECORD command, output, and verdict',
       'Run full test suite. Report actual pass/fail counts.',
-      'Write report to artifacts/verification-report.md'
+      'Write report to artifacts/verification-report.md',
+      ...mcpInstructions,
+      ...(runId ? [`Also call save_artifact(run_id=${runId}, name="verification-report.md", content=<the report>)`] : [])
     ]
   });
 
@@ -82,7 +96,7 @@ export async function verificationGate(inputs, ctx) {
     ].join('\n'),
     title: 'Verification Evidence Review',
     context: {
-      runId: ctx.runId,
+      runId: runId || ctx.runId,
       files: [{ path: 'artifacts/verification-report.md', format: 'markdown' }]
     }
   });

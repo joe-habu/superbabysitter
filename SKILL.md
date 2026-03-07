@@ -41,8 +41,8 @@ Without this, files imported from outside `.a5c/` will fail with ERR_REQUIRE_ESM
 |------|-------|---------|----------|
 | `process/design-gate.js` | 1 | `designGate()`, `contextExplorerTask`, `designProposalTask` | No implementation without approved design |
 | `process/planning-gate.js` | 2 | `planningGate()`, `planWriterTask`, `planVerifierTask` | No code without bite-sized TDD plan |
-| `process/subagent-tdd-loop.js` | 3 | `subagentTddLoop()`, `subagentImplementerTask`, `subagentFixerTask`, `subagentSpecReviewerTask`, `subagentQualityReviewerTask` | No production code without failing test first; Do not trust reports; Spec before quality; Accumulate build manifest across tasks |
-| `process/build-manifest.js` | 3 (shared) | `createEmptyManifest()`, `addTaskToManifest()`, `writeManifestMarkdown()`, `condensedManifestForPrompt()` | Build manifest functions shared across TDD loops |
+| `process/subagent-tdd-loop.js` | 3 | `subagentTddLoop()`, `subagentImplementerTask`, `subagentFixerTask`, `subagentSpecReviewerTask`, `subagentQualityReviewerTask` | No production code without failing test first; Do not trust reports; Spec before quality |
+| `process/mcp-state-helpers.js` | shared | `mcpStateInstructions()`, `mcpImplementerInstructions()`, `mcpReviewerInstructions()`, `mcpTddFixerInstructions()`, `mcpFixInstructions()`, `mcpDebuggingInstructions()` | MCP instruction generators for agent prompts |
 | `process/verification-gate.js` | 4 | `verificationGate()`, `verificationTask` | No completion claims without fresh verification evidence |
 | `process/debugging-phase.js` | 5 | `debuggingPhase(ctx, issue, attempt?)`, `rootCauseInvestigationTask`, `patternAnalysisTask`, `hypothesisTestingTask` | No fixes without root cause investigation first; Max 3 debug attempts before escalation |
 | `process/finishing-gate.js` | 6 | `finishingGate(inputs, ctx, attempt?)`, `testRunnerTask` | Verify tests pass before presenting finish options; Max 3 test/debug cycles before escalation |
@@ -53,25 +53,11 @@ Without this, files imported from outside `.a5c/` will fail with ERR_REQUIRE_ESM
 - `finishing-gate.js` imports `debuggingPhase` from `debugging-phase.js` (for auto-debugging when tests fail)
 - `quality-gated-development.js` imports all 6 phases
 
-### Build Manifest (Task Context Propagation)
+### State Management (MCP)
 
-The TDD implementation loop maintains a cumulative **Build Manifest** that grows after each completed task. This solves the problem of later tasks losing context from earlier ones.
+Workflow state is managed by the `superbabysitter-state` MCP plugin. Agents are active participants in state management -- they query prior decisions and record results via MCP tools. This replaces the previous in-memory build manifest approach, solving context loss between phases and enabling cross-session persistence.
 
-**What it tracks:**
-- Files created/modified by each task
-- Architectural decisions made during each task
-- Inter-task file dependencies (`dependsOn`)
-- Open concerns carried forward
-
-**How it works:**
-1. Manifest accumulates in-memory across the task loop
-2. After each task's review cycle, written to `artifacts/build-manifest.md`
-3. Condensed summary injected into implementer, spec reviewer, and quality reviewer prompts
-4. Implementer declares new `architecturalDecisions` and `dependsOn` in its output
-
-**Crash resilience:** The markdown file persists on disk. If a run crashes mid-loop, the manifest survives for the next attempt.
-
-**Return value:** `subagentTddLoop()` returns `{ completedTasks, manifest }` -- the manifest is available to downstream phases (verification, debugging, finishing).
+Agents use `get_run_summary()` and `search_results()` before starting work, and `record_result()` after completing work. The `mcp-state-helpers.js` module generates the MCP instructions injected into each agent's prompt.
 
 ## Usage
 
@@ -92,7 +78,7 @@ export async function process(inputs, ctx) {
   // Use only the phases you need
   const { designResult } = await designGate({ feature: inputs.feature, codebasePath: '.' }, ctx);
   const { planResult } = await planningGate({ feature: inputs.feature, designResult }, ctx);
-  const { completedTasks } = await subagentTddLoop(planResult.tasks, ctx);
+  const { completedTasks } = await subagentTddLoop(planResult.tasks, runId, ctx);
 
   return { success: true, tasksCompleted: completedTasks.length };
 }

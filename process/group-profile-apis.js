@@ -1,7 +1,7 @@
 /**
  * @process superbabysitter/group-profile-apis
  * @description Group Profile APIs (Milestone 3) - skips design/planning gates (pre-approved plan), implements via subagent TDD loop, then verification + finishing.
- * @inputs {}
+ * @inputs { runId?: number, moonrakerPath?: string, unhygienixPath?: string }
  * @outputs { success: boolean, tasksCompleted: number }
  */
 
@@ -10,10 +10,8 @@ import { verificationGate } from './verification-gate.js';
 import { debuggingPhase } from './debugging-phase.js';
 import { finishingGate } from './finishing-gate.js';
 
-const MOONRAKER = '/Users/coleman/GolandProjects/moonraker';
-const UNHYGIENIX = '/Users/coleman/GolandProjects/unhygienix';
-
-const tasks = [
+function buildTasks(MOONRAKER, UNHYGIENIX) {
+  return [
   // =====================================================================
   // TASK 1: Moonraker Proto Changes + Regeneration
   // =====================================================================
@@ -387,16 +385,30 @@ Add tests in api/server/cleanroom_groups_test.go (or create if needed). Follow e
 \`cd ${UNHYGIENIX} && go test ./api/server/... -run TestGetGroupCleanRoomMemberships -v\``,
     context: 'This is Task 6 of 6 (final task). Depends on Tasks 4 (proto) and 5 (DB). This completes the unhygienix side. The handler follows the same patterns as FetchCleanRoomGroups and BulkAddCleanRoomGroup.'
   }
-];
+  ];
+}
 
 export async function process(inputs, ctx) {
-  ctx.log('Group Profile APIs (Milestone 3) - Pre-approved plan, starting at Phase 3');
+  const log = (ctx.log || (() => {})).bind(ctx);
+  log('Group Profile APIs (Milestone 3) - Pre-approved plan, starting at Phase 3');
+
+  const {
+    runId = null,
+    moonrakerPath = '/Users/coleman/GolandProjects/moonraker',
+    unhygienixPath = '/Users/coleman/GolandProjects/unhygienix'
+  } = inputs;
+
+  if (!runId) {
+    log('WARNING: No runId provided. MCP state tracking is disabled for this run.');
+  }
+
+  const tasks = buildTasks(moonrakerPath, unhygienixPath);
 
   // ========================================================================
   // PHASE 3: TDD IMPLEMENTATION LOOP (plan already designed and approved)
   // ========================================================================
 
-  const { completedTasks, manifest } = await subagentTddLoop(tasks, ctx);
+  const { completedTasks } = await subagentTddLoop(tasks, runId, ctx);
 
   // ========================================================================
   // PHASE 4: VERIFICATION GATE
@@ -406,19 +418,20 @@ export async function process(inputs, ctx) {
     feature: 'Group Profile APIs (Milestone 3)',
     tasks: tasks.map(t => t.name),
     verificationCommands: [
-      `cd ${MOONRAKER} && go build ./...`,
-      `cd ${MOONRAKER} && go test ./db/... -run TestGetGroupUsersWithRoles -v`,
-      `cd ${MOONRAKER} && go test ./db/... -run TestGetGroupUserCount -v`,
-      `cd ${UNHYGIENIX} && go build ./...`,
-      `cd ${UNHYGIENIX} && go test ./db/... -run TestGetGroupCleanRoomMemberships -v`,
-      `cd ${UNHYGIENIX} && go test ./db/... -run TestCountGroupCleanRoomMemberships -v`,
-      `cd ${UNHYGIENIX} && go test ./api/server/... -run TestGetGroupCleanRoomMemberships -v`
+      `cd ${moonrakerPath} && go build ./...`,
+      `cd ${moonrakerPath} && go test ./db/... -run TestGetGroupUsersWithRoles -v`,
+      `cd ${moonrakerPath} && go test ./db/... -run TestGetGroupUserCount -v`,
+      `cd ${unhygienixPath} && go build ./...`,
+      `cd ${unhygienixPath} && go test ./db/... -run TestGetGroupCleanRoomMemberships -v`,
+      `cd ${unhygienixPath} && go test ./db/... -run TestCountGroupCleanRoomMemberships -v`,
+      `cd ${unhygienixPath} && go test ./api/server/... -run TestGetGroupCleanRoomMemberships -v`
     ]
   };
 
   const { verificationResult } = await verificationGate({
     feature: 'Group Profile APIs (Milestone 3)',
-    planResult: verificationPlan
+    planResult: verificationPlan,
+    runId
   }, ctx);
 
   // ========================================================================
@@ -426,16 +439,32 @@ export async function process(inputs, ctx) {
   // ========================================================================
 
   if (!verificationResult.passed) {
-    ctx.log('Phase 5: Debugging Phase (verification failed)');
+    log('Phase 5: Debugging Phase (verification failed)');
     for (const failedReq of verificationResult.requirements.filter(r => r.verdict !== 'PASS')) {
-      await debuggingPhase(ctx, `Requirement failed: ${failedReq.requirement}\nEvidence: ${failedReq.output}`);
+      await debuggingPhase(ctx, `Requirement failed: ${failedReq.requirement}\nEvidence: ${failedReq.output}`, 1, runId);
     }
     const reVerification = await verificationGate({
       feature: 'Group Profile APIs (Milestone 3)',
-      planResult: verificationPlan
+      planResult: verificationPlan,
+      runId
     }, ctx);
     if (!reVerification.verificationResult.passed) {
-      ctx.log('Re-verification still has failures. Finishing gate will handle remaining issues.');
+      const failingReqs = reVerification.verificationResult.requirements
+        .filter(r => r.verdict !== 'PASS')
+        .map(r => `  - ${r.requirement}`);
+      await ctx.breakpoint({
+        question: [
+          'Re-verification still has failures after debugging.',
+          '',
+          'Failing requirements:',
+          ...failingReqs,
+          '',
+          'Resolve this breakpoint to continue to the finishing gate (which will run its own test/debug cycle).',
+          'To abort, leave the breakpoint unresolved and cancel the run.'
+        ].join('\n'),
+        title: 'Re-verification Failures',
+        context: { runId }
+      });
     }
   }
 
@@ -443,13 +472,12 @@ export async function process(inputs, ctx) {
   // PHASE 6: FINISHING GATE
   // ========================================================================
 
-  await finishingGate({}, ctx);
+  await finishingGate({ runId }, ctx);
 
   return {
     success: true,
     feature: 'Group Profile APIs (Milestone 3)',
     tasksCompleted: completedTasks.length,
-    completedTasks,
-    manifest
+    completedTasks
   };
 }

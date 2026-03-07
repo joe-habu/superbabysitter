@@ -2,16 +2,18 @@
 
 Quality-gated development workflow skill for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) + [babysitter SDK](https://www.npmjs.com/package/@a5c-ai/babysitter-sdk).
 
-**Babysitter controls the flow. Superpowers controls the quality. Modular files enable composition.**
+**Babysitter controls the flow. Superpowers controls the quality. MCP state enables persistence.**
 
 ## What It Does
 
 Superbabysitter orchestrates a 6-phase development workflow where every phase is enforced by a quality gate. Each gate is a babysitter breakpoint requiring human approval before proceeding. The phases are modular ES modules that can be composed individually or used as a full pipeline.
 
 ```
-Design Gate ──> Planning Gate ──> TDD Loop ──> Verification Gate ──> Debugging Phase ──> Finishing Gate
+Design Gate --> Planning Gate --> TDD Loop --> Verification Gate --> Debugging Phase --> Finishing Gate
    (1)             (2)             (3)              (4)                  (5)                (6)
 ```
+
+Agents actively manage workflow state via MCP tools -- querying prior decisions, recording results, and persisting context across phases and sessions.
 
 ## Prerequisites
 
@@ -22,6 +24,22 @@ Install the [babysitter plugin](https://www.npmjs.com/package/@anthropic-ai/clau
 ```bash
 claude plugins:install @anthropic-ai/claude-code-babysitter
 ```
+
+### Superbabysitter State Plugin
+
+The `superbabysitter-state` plugin provides persistent state management via MCP tools. It must be installed at `~/.claude/plugins/superbabysitter-state/`.
+
+```bash
+cd ~/.claude/plugins/superbabysitter-state
+npm install
+```
+
+This plugin provides 9 MCP tools (via the `babysitter-state` server) that agents use to:
+- Create and track workflow runs (`create_run`, `complete_run`)
+- Record phase results and artifacts (`record_result`, `save_artifact`)
+- Query state with a 3-layer pattern (`search_results` -> `get_timeline` -> `get_results`)
+- Get condensed run summaries (`get_run_summary`)
+- Search decisions from prior runs (`search_prior_runs`)
 
 ### Superpowers Skills
 
@@ -48,6 +66,16 @@ npm install
 
 ## Architecture
 
+### State Management
+
+Workflow state is managed by the `superbabysitter-state` MCP plugin, which provides a SQLite database with full-text search (FTS5). Agents are active participants in state management:
+
+- **Before starting work**: Agents call `get_run_summary()` and `search_results()` to understand current run state, prior decisions, and established patterns.
+- **After completing work**: Agents call `record_result()` to persist their outputs, decisions, and concerns.
+- **Cross-session**: `search_prior_runs()` lets agents query decisions from previous workflow runs.
+
+This replaces the previous in-memory build manifest approach, solving context loss between phases and enabling cross-session persistence.
+
 ### Process Files
 
 | File | Phase | Exports | Iron Law |
@@ -55,7 +83,7 @@ npm install
 | `process/design-gate.js` | 1 | `designGate()`, `contextExplorerTask`, `designProposalTask` | No implementation without approved design |
 | `process/planning-gate.js` | 2 | `planningGate()`, `planWriterTask`, `planVerifierTask` | No code without bite-sized TDD plan |
 | `process/subagent-tdd-loop.js` | 3 | `subagentTddLoop()`, `subagentImplementerTask`, `subagentFixerTask`, `subagentSpecReviewerTask`, `subagentQualityReviewerTask` | No production code without failing test first |
-| `process/build-manifest.js` | 3 (shared) | `createEmptyManifest()`, `addTaskToManifest()`, `writeManifestMarkdown()`, `condensedManifestForPrompt()` | Build manifest functions shared across TDD loops |
+| `process/mcp-state-helpers.js` | shared | `mcpStateInstructions()`, `mcpImplementerInstructions()`, `mcpReviewerInstructions()`, `mcpTddFixerInstructions()`, `mcpFixInstructions()`, `mcpDebuggingInstructions()` | MCP instruction generators for agent prompts |
 | `process/verification-gate.js` | 4 | `verificationGate()`, `verificationTask` | No completion claims without fresh verification evidence |
 | `process/debugging-phase.js` | 5 | `debuggingPhase()`, `rootCauseInvestigationTask`, `patternAnalysisTask`, `hypothesisTestingTask` | No fixes without root cause investigation first |
 | `process/finishing-gate.js` | 6 | `finishingGate()`, `testRunnerTask` | Verify tests pass before presenting finish options |
@@ -66,13 +94,17 @@ npm install
 
 ### Dependencies Between Phases
 
+- `mcp-state-helpers.js` is imported by all phase modules for MCP instruction generation
 - `debugging-phase.js` imports `subagentImplementerTask` from `subagent-tdd-loop.js`
 - `finishing-gate.js` imports `debuggingPhase` from `debugging-phase.js`
 - `quality-gated-development.js` imports all 6 phases
 
-### Build Manifest (Context Propagation)
+### runId Threading
 
-The TDD loop maintains a cumulative build manifest that grows after each task, tracking files changed, architectural decisions, inter-task dependencies, and open concerns. Written to `artifacts/build-manifest.md` for crash resilience.
+A `runId` is created during the design gate and threaded through every subsequent phase. This ID links all MCP state records to a single workflow run and enables:
+- Agents querying prior phase results within the same run
+- Cross-phase context (debugging agents can see TDD decisions)
+- Run completion tracking and cross-session search
 
 ## Usage
 
@@ -90,11 +122,11 @@ import { planningGate } from './planning-gate.js';
 import { subagentTddLoop } from './subagent-tdd-loop.js';
 
 export async function process(inputs, ctx) {
-  const { designResult } = await designGate({ feature: inputs.feature, codebasePath: '.' }, ctx);
-  const { planResult } = await planningGate({ feature: inputs.feature, designResult }, ctx);
-  const { completedTasks } = await subagentTddLoop(planResult.tasks, ctx);
+  const { designResult, runId } = await designGate({ feature: inputs.feature, codebasePath: '.' }, ctx);
+  const { planResult } = await planningGate({ feature: inputs.feature, runId }, ctx);
+  const { completedTasks } = await subagentTddLoop(planResult.tasks, runId, ctx);
 
-  return { success: true, tasksCompleted: completedTasks.length };
+  return { success: true, tasksCompleted: completedTasks.length, runId };
 }
 ```
 
@@ -143,7 +175,33 @@ These are non-negotiable. Every process built with this skill must enforce all o
 | Debugging Escalation | 5 | Breakpoint | Continuation (after 3 attempts) |
 | Test Verification | 6 | Agent | Finish options |
 | Finishing Escalation | 6 | Breakpoint | Completion (after 3 cycles) |
-| Finish Decision | 6 | Breakpoint | Completion (4 options) |
+| Finish Decision | 6 | Breakpoint | Completion |
+
+## MCP Tools Reference
+
+Agents interact with the `babysitter-state` MCP server. See `~/.claude/plugins/superbabysitter-state/CLAUDE.md` for full tool documentation.
+
+### 3-Layer Query Pattern
+
+1. `search_results` (index) - Lightweight search by run_id, phase, result_type, or full-text query
+2. `get_timeline` (context) - Chronological context around a specific result
+3. `get_results` (details) - Full result objects for specific IDs
+
+### Write Tools
+
+| Tool | Purpose |
+|------|---------|
+| `create_run` | Start a new workflow run |
+| `record_result` | Store a phase outcome (design, implementation, review, etc.) |
+| `save_artifact` | Store generated documents (design.md, plan.md, etc.) |
+| `complete_run` | Mark run as finished with status and outcome |
+
+### Convenience Tools
+
+| Tool | Purpose |
+|------|---------|
+| `get_run_summary` | Condensed run state (phases completed, decisions, files changed) |
+| `search_prior_runs` | Find past runs by project, feature, or status |
 
 ## License
 
