@@ -3,6 +3,11 @@
  * @description Helper functions for generating MCP state tool instructions for agents.
  * These instructions are injected into agent prompts so they know how to query and record
  * workflow state via the babysitter-state MCP tools.
+ *
+ * All query instructions follow the 3-layer pattern:
+ *   1. search_results -> returns IDs + titles only
+ *   2. get_results(ids=[...]) -> fetches full details (narratives, decisions, files_changed)
+ *   3. Use the content to inform your work
  */
 
 /**
@@ -15,57 +20,78 @@
  * @returns {string[]} Array of instruction strings to append to agent instructions
  */
 export function mcpStateInstructions({ runId, phase, resultType, queryInstructions = {} }) {
-  const instructions = [
-    '',
-    '--- MCP STATE MANAGEMENT ---',
-    `You have access to babysitter-state MCP tools for run ${runId}.`,
-    ''
-  ];
+  const instructions = [];
+  const hasAnyQuery = queryInstructions.getRunSummary || queryInstructions.searchDecisions ||
+    queryInstructions.searchPhase || queryInstructions.searchResultType || queryInstructions.custom;
 
-  // Query instructions (what to read before starting)
-  if (queryInstructions.getRunSummary) {
+  if (hasAnyQuery) {
     instructions.push(
-      'BEFORE STARTING:',
-      `1. Call get_run_summary(run_id=${runId}) to understand current run state`
+      '',
+      '=== MANDATORY STATE QUERY (DO THIS FIRST, BEFORE ANY OTHER WORK) ==='
     );
+
+    let step = 1;
+
+    if (queryInstructions.getRunSummary) {
+      instructions.push(
+        `${step}. Call get_run_summary(run_id=${runId})`,
+        '   PURPOSE: Get a condensed view of completed phases, task progress, decisions, and files changed.',
+        '   USE THIS TO: Orient yourself on what has been done and what remains.'
+      );
+      step++;
+    }
+
+    if (queryInstructions.searchDecisions) {
+      instructions.push(
+        `${step}. Call search_results(run_id=${runId}, result_type="decision")`,
+        '   THEN: Call get_results(ids=[...IDs from search]) to fetch full details.',
+        '   PURPOSE: See the rationale behind each architectural decision, not just titles.',
+        '   USE THIS TO: Maintain consistency with prior decisions. Flag deviations.'
+      );
+      step++;
+    }
+
+    if (queryInstructions.searchPhase) {
+      instructions.push(
+        `${step}. Call search_results(run_id=${runId}, phase="${queryInstructions.searchPhase}")`,
+        '   THEN: Call get_results(ids=[...IDs from search]) to fetch full details.',
+        `   PURPOSE: See what happened in the "${queryInstructions.searchPhase}" phase including narratives and files changed.`,
+        '   USE THIS TO: Build on prior work rather than duplicating or contradicting it.'
+      );
+      step++;
+    }
+
+    if (queryInstructions.searchResultType) {
+      instructions.push(
+        `${step}. Call search_results(run_id=${runId}, result_type="${queryInstructions.searchResultType}")`,
+        '   THEN: Call get_results(ids=[...IDs from search]) to fetch full details.',
+        `   PURPOSE: See detailed results of type "${queryInstructions.searchResultType}".`,
+        '   USE THIS TO: Understand specific outcomes and apply learnings.'
+      );
+      step++;
+    }
+
+    if (queryInstructions.custom) {
+      instructions.push(...queryInstructions.custom);
+    }
+
+    instructions.push('=== END MANDATORY STATE QUERY ===');
   }
 
-  if (queryInstructions.searchDecisions) {
-    instructions.push(
-      `2. Call search_results(run_id=${runId}, result_type="decision") for architectural decisions`
-    );
-  }
-
-  if (queryInstructions.searchPhase) {
-    instructions.push(
-      `3. Call search_results(run_id=${runId}, phase="${queryInstructions.searchPhase}") for prior phase results`
-    );
-  }
-
-  if (queryInstructions.searchResultType) {
-    instructions.push(
-      `4. Call search_results(run_id=${runId}, result_type="${queryInstructions.searchResultType}") for specific results`
-    );
-  }
-
-  if (queryInstructions.custom) {
-    instructions.push(...queryInstructions.custom);
-  }
-
-  // Record instructions (what to write after completing)
   instructions.push(
     '',
-    'AFTER COMPLETING YOUR WORK:',
-    `Call record_result with:`,
+    '=== STATE RECORDING (DO THIS AFTER COMPLETING YOUR WORK) ===',
+    'Call record_result with:',
     `  run_id: ${runId}`,
     `  phase: "${phase}"`,
     `  result_type: "${resultType}"`,
-    `  title: (brief title of what you did)`,
-    `  narrative: (detailed description)`,
-    `  files_changed: (array of file paths you modified)`,
-    `  architectural_decisions: (array of decisions you made)`,
-    `  concerns: (array of open concerns)`,
-    '--- END MCP STATE ---',
+    '  title: (brief title of what you did)',
+    '  narrative: (detailed description)',
+    '  files_changed: (array of file paths you modified)',
+    '  architectural_decisions: (array of decisions you made)',
+    '  concerns: (array of open concerns)',
+    '  stateContextUsed: (what you learned from state queries and how it influenced your work)',
+    '=== END STATE RECORDING ===',
     ''
   );
 
@@ -79,30 +105,38 @@ export function mcpStateInstructions({ runId, phase, resultType, queryInstructio
 export function mcpImplementerInstructions(runId, taskNumber, taskName) {
   return [
     '',
-    '--- MCP STATE MANAGEMENT ---',
-    `You have access to babysitter-state MCP tools for run ${runId}.`,
+    '=== MANDATORY STATE QUERY (DO THIS FIRST, BEFORE ANY OTHER WORK) ===',
+    `1. Call get_run_summary(run_id=${runId})`,
+    '   PURPOSE: Get a condensed view of completed tasks, decisions, and files changed so far.',
+    '   USE THIS TO: Understand where your task fits in the overall implementation.',
     '',
-    'BEFORE STARTING:',
-    `1. Call get_run_summary(run_id=${runId}) to understand current run state (completed tasks, decisions, files changed)`,
-    `2. Call search_results(run_id=${runId}, result_type="decision") for all architectural decisions made so far`,
-    `3. Call search_results(run_id=${runId}, result_type="implementation") for prior task implementations`,
-    'Use this context to understand where your task fits and follow established patterns.',
+    `2. Call search_results(run_id=${runId}, result_type="decision")`,
+    '   THEN: Call get_results(ids=[...IDs from search]) to fetch full details.',
+    '   PURPOSE: See the rationale behind each architectural decision, not just titles.',
+    '   USE THIS TO: Follow established patterns and flag any inconsistencies.',
     '',
-    'AFTER COMPLETING YOUR WORK:',
-    `Call record_result with:`,
+    `3. Call search_results(run_id=${runId}, result_type="implementation")`,
+    '   THEN: Call get_results(ids=[...IDs from search]) to fetch full details.',
+    '   PURPOSE: See prior task implementations including code changes and narratives.',
+    '   USE THIS TO: Reuse helpers/patterns from earlier tasks. Avoid duplicating work.',
+    '=== END MANDATORY STATE QUERY ===',
+    '',
+    '=== STATE RECORDING (DO THIS AFTER COMPLETING YOUR WORK) ===',
+    'Call record_result with:',
     `  run_id: ${runId}`,
-    `  phase: "tdd"`,
-    `  result_type: "implementation"`,
+    '  phase: "tdd"',
+    '  result_type: "implementation"',
     `  task_number: ${taskNumber}`,
     `  task_name: "${taskName}"`,
-    `  title: (brief title of what you implemented)`,
-    `  narrative: (detailed description of implementation)`,
-    `  files_changed: (array of file paths you modified)`,
-    `  files_read: (array of file paths you read for context)`,
-    `  architectural_decisions: (array of any decisions you made)`,
-    `  concerns: (array of open concerns or risks)`,
+    '  title: (brief title of what you implemented)',
+    '  narrative: (detailed description of implementation)',
+    '  files_changed: (array of file paths you modified)',
+    '  files_read: (array of file paths you read for context)',
+    '  architectural_decisions: (array of any decisions you made)',
+    '  concerns: (array of open concerns or risks)',
     `  dependencies: (array of task numbers this depends on)`,
-    '--- END MCP STATE ---',
+    '  stateContextUsed: (what you learned from state queries and how it influenced your work)',
+    '=== END STATE RECORDING ===',
     ''
   ];
 }
@@ -113,24 +147,30 @@ export function mcpImplementerInstructions(runId, taskNumber, taskName) {
 export function mcpReviewerInstructions(runId, taskNumber, taskName, reviewType) {
   return [
     '',
-    '--- MCP STATE MANAGEMENT ---',
-    `You have access to babysitter-state MCP tools for run ${runId}.`,
+    '=== MANDATORY STATE QUERY (DO THIS FIRST, BEFORE ANY OTHER WORK) ===',
+    `1. Call search_results(run_id=${runId}, result_type="implementation", task_number=${taskNumber})`,
+    '   THEN: Call get_results(ids=[...IDs from search]) to fetch full details.',
+    '   PURPOSE: See the full narrative and files changed for the implementation you are reviewing.',
+    '   USE THIS TO: Understand intent and verify completeness against the spec.',
     '',
-    'BEFORE REVIEWING:',
-    `1. Call search_results(run_id=${runId}, result_type="implementation", task_number=${taskNumber}) to see what was implemented`,
-    `2. Call search_results(run_id=${runId}, result_type="decision") for architectural decisions to check consistency`,
+    `2. Call search_results(run_id=${runId}, result_type="decision")`,
+    '   THEN: Call get_results(ids=[...IDs from search]) to fetch full details.',
+    '   PURPOSE: See all architectural decisions with their rationale.',
+    '   USE THIS TO: Check that the implementation is consistent with established decisions.',
+    '=== END MANDATORY STATE QUERY ===',
     '',
-    'AFTER REVIEWING:',
-    `Call record_result with:`,
+    '=== STATE RECORDING (DO THIS AFTER COMPLETING YOUR WORK) ===',
+    'Call record_result with:',
     `  run_id: ${runId}`,
-    `  phase: "tdd"`,
+    '  phase: "tdd"',
     `  result_type: "${reviewType === 'spec' ? 'spec_review' : 'quality_review'}"`,
     `  task_number: ${taskNumber}`,
     `  task_name: "${taskName}"`,
     `  title: "${reviewType} review for task ${taskNumber}"`,
-    `  status: "pass" or "fail"`,
-    `  review_issues: (array of issues found, empty if pass)`,
-    '--- END MCP STATE ---',
+    '  status: "pass" or "fail"',
+    '  review_issues: (array of issues found, empty if pass)',
+    '  stateContextUsed: (what you learned from state queries and how it influenced your review)',
+    '=== END STATE RECORDING ===',
     ''
   ];
 }
@@ -143,24 +183,29 @@ export function mcpTddFixerInstructions(runId, taskNumber, taskName, reviewType)
   const reviewResultType = reviewType === 'spec' ? 'spec_review' : 'quality_review';
   return [
     '',
-    '--- MCP STATE MANAGEMENT ---',
-    `You have access to babysitter-state MCP tools for run ${runId}.`,
+    '=== MANDATORY STATE QUERY (DO THIS FIRST, BEFORE ANY OTHER WORK) ===',
+    `1. Call get_run_summary(run_id=${runId})`,
+    '   PURPOSE: Get the full picture of the run including completed tasks and decisions.',
+    '   USE THIS TO: Understand the broader context of what you are fixing.',
     '',
-    'BEFORE FIXING:',
-    `1. Call get_run_summary(run_id=${runId}) to understand full run state`,
-    `2. Call search_results(run_id=${runId}, result_type="${reviewResultType}", task_number=${taskNumber}) for the review that identified these issues`,
+    `2. Call search_results(run_id=${runId}, result_type="${reviewResultType}", task_number=${taskNumber})`,
+    '   THEN: Call get_results(ids=[...IDs from search]) to fetch full details.',
+    `   PURPOSE: See the exact review issues that need fixing, with full narrative.`,
+    '   USE THIS TO: Address each issue precisely rather than guessing what the reviewer found.',
+    '=== END MANDATORY STATE QUERY ===',
     '',
-    'AFTER FIXING:',
-    `Call record_result with:`,
+    '=== STATE RECORDING (DO THIS AFTER COMPLETING YOUR WORK) ===',
+    'Call record_result with:',
     `  run_id: ${runId}`,
-    `  phase: "tdd"`,
-    `  result_type: "fix"`,
+    '  phase: "tdd"',
+    '  result_type: "fix"',
     `  task_number: ${taskNumber}`,
     `  task_name: "${taskName}"`,
-    `  title: (brief description of what you fixed)`,
-    `  narrative: (detailed description of the fix)`,
-    `  files_changed: (array of file paths you modified)`,
-    '--- END MCP STATE ---',
+    '  title: (brief description of what you fixed)',
+    '  narrative: (detailed description of the fix)',
+    '  files_changed: (array of file paths you modified)',
+    '  stateContextUsed: (what you learned from state queries and how it influenced your fix)',
+    '=== END STATE RECORDING ===',
     ''
   ];
 }
@@ -172,24 +217,37 @@ export function mcpTddFixerInstructions(runId, taskNumber, taskName, reviewType)
 export function mcpFixInstructions(runId) {
   return [
     '',
-    '--- MCP STATE MANAGEMENT ---',
-    `You have access to babysitter-state MCP tools for run ${runId}.`,
+    '=== MANDATORY STATE QUERY (DO THIS FIRST, BEFORE ANY OTHER WORK) ===',
+    `1. Call get_run_summary(run_id=${runId})`,
+    '   PURPOSE: Get the full picture of the run including what debugging has uncovered.',
+    '   USE THIS TO: Understand the root cause chain that led to this fix.',
     '',
-    'BEFORE FIXING:',
-    `1. Call get_run_summary(run_id=${runId}) to understand full run state`,
-    `2. Call search_results(run_id=${runId}, result_type="root_cause_investigation") for the investigation that identified this root cause`,
-    `3. Call search_results(run_id=${runId}, result_type="pattern_analysis") for pattern analysis results`,
-    `4. Call search_results(run_id=${runId}, result_type="hypothesis_test") for hypothesis testing results`,
+    `2. Call search_results(run_id=${runId}, result_type="root_cause_investigation")`,
+    '   THEN: Call get_results(ids=[...IDs from search]) to fetch full details.',
+    '   PURPOSE: See the full investigation narrative, not just the title.',
+    '   USE THIS TO: Understand the diagnosed root cause before attempting a fix.',
     '',
-    'AFTER FIXING:',
-    `Call record_result with:`,
+    `3. Call search_results(run_id=${runId}, result_type="pattern_analysis")`,
+    '   THEN: Call get_results(ids=[...IDs from search]) to fetch full details.',
+    '   PURPOSE: See pattern analysis results with full evidence.',
+    '   USE THIS TO: Ensure your fix addresses the root pattern, not just symptoms.',
+    '',
+    `4. Call search_results(run_id=${runId}, result_type="hypothesis_test")`,
+    '   THEN: Call get_results(ids=[...IDs from search]) to fetch full details.',
+    '   PURPOSE: See which hypotheses were tested and their outcomes.',
+    '   USE THIS TO: Target your fix at the confirmed hypothesis.',
+    '=== END MANDATORY STATE QUERY ===',
+    '',
+    '=== STATE RECORDING (DO THIS AFTER COMPLETING YOUR WORK) ===',
+    'Call record_result with:',
     `  run_id: ${runId}`,
-    `  phase: "debugging"`,
-    `  result_type: "fix"`,
-    `  title: (brief description of what you fixed)`,
-    `  narrative: (detailed description of the fix and regression test)`,
-    `  files_changed: (array of file paths you modified)`,
-    '--- END MCP STATE ---',
+    '  phase: "debugging"',
+    '  result_type: "fix"',
+    '  title: (brief description of what you fixed)',
+    '  narrative: (detailed description of the fix and regression test)',
+    '  files_changed: (array of file paths you modified)',
+    '  stateContextUsed: (what you learned from state queries and how it influenced your fix)',
+    '=== END STATE RECORDING ===',
     ''
   ];
 }
@@ -200,24 +258,36 @@ export function mcpFixInstructions(runId) {
 export function mcpDebuggingInstructions(runId, resultType = 'debug_investigation') {
   return [
     '',
-    '--- MCP STATE MANAGEMENT ---',
-    `You have access to babysitter-state MCP tools for run ${runId}.`,
+    '=== MANDATORY STATE QUERY (DO THIS FIRST, BEFORE ANY OTHER WORK) ===',
+    `1. Call get_run_summary(run_id=${runId})`,
+    '   PURPOSE: Get a condensed view of the entire run state.',
+    '   USE THIS TO: Orient yourself on what has been built and where failures occurred.',
     '',
-    'BEFORE INVESTIGATING:',
-    `1. Call get_run_summary(run_id=${runId}) to understand full run state`,
-    `2. Call search_results(run_id=${runId}, result_type="decision") for all architectural decisions`,
-    `3. Call search_results(run_id=${runId}, phase="tdd") for all implementation results`,
-    `4. Call search_results(run_id=${runId}, result_type="verification") for verification results`,
-    'Use this context to inform your root cause investigation.',
+    `2. Call search_results(run_id=${runId}, result_type="decision")`,
+    '   THEN: Call get_results(ids=[...IDs from search]) to fetch full details.',
+    '   PURPOSE: See all architectural decisions with their rationale.',
+    '   USE THIS TO: Check if failures stem from violated assumptions in decisions.',
     '',
-    'AFTER INVESTIGATING:',
-    `Call record_result with:`,
+    `3. Call search_results(run_id=${runId}, phase="tdd")`,
+    '   THEN: Call get_results(ids=[...IDs from search]) to fetch full details.',
+    '   PURPOSE: See all implementation results including files changed and narratives.',
+    '   USE THIS TO: Trace the implementation chain and identify where things went wrong.',
+    '',
+    `4. Call search_results(run_id=${runId}, result_type="verification")`,
+    '   THEN: Call get_results(ids=[...IDs from search]) to fetch full details.',
+    '   PURPOSE: See verification results with full evidence of what passed and failed.',
+    '   USE THIS TO: Focus your investigation on the specific failures identified.',
+    '=== END MANDATORY STATE QUERY ===',
+    '',
+    '=== STATE RECORDING (DO THIS AFTER COMPLETING YOUR WORK) ===',
+    'Call record_result with:',
     `  run_id: ${runId}`,
-    `  phase: "debugging"`,
+    '  phase: "debugging"',
     `  result_type: "${resultType}"`,
-    `  title: (brief description of what you found)`,
-    `  narrative: (detailed hypothesis and evidence)`,
-    '--- END MCP STATE ---',
+    '  title: (brief description of what you found)',
+    '  narrative: (detailed hypothesis and evidence)',
+    '  stateContextUsed: (what you learned from state queries and how it influenced your investigation)',
+    '=== END STATE RECORDING ===',
     ''
   ];
 }

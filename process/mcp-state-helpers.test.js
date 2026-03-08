@@ -9,6 +9,53 @@ import {
   mcpDebuggingInstructions
 } from './mcp-state-helpers.js';
 
+// === Shared assertion helpers ===
+
+function assertMandatoryQueryDelimiters(joined) {
+  assert.ok(joined.includes('=== MANDATORY STATE QUERY (DO THIS FIRST, BEFORE ANY OTHER WORK) ==='),
+    'Missing opening MANDATORY STATE QUERY delimiter');
+  assert.ok(joined.includes('=== END MANDATORY STATE QUERY ==='),
+    'Missing closing MANDATORY STATE QUERY delimiter');
+}
+
+function assertRecordingDelimiters(joined) {
+  assert.ok(joined.includes('=== STATE RECORDING (DO THIS AFTER COMPLETING YOUR WORK) ==='),
+    'Missing opening STATE RECORDING delimiter');
+  assert.ok(joined.includes('=== END STATE RECORDING ==='),
+    'Missing closing STATE RECORDING delimiter');
+}
+
+function assertGetResultsFollowsSearch(joined) {
+  const searchIdx = joined.indexOf('search_results');
+  if (searchIdx !== -1) {
+    assert.ok(joined.includes('get_results(ids='),
+      'get_results must follow search_results to complete the 3-layer pattern');
+  }
+}
+
+function assertStateContextUsed(joined) {
+  assert.ok(joined.includes('stateContextUsed'),
+    'Recording section must include stateContextUsed for accountability');
+}
+
+function assertPurposeLines(joined) {
+  if (joined.includes('=== MANDATORY STATE QUERY')) {
+    assert.ok(joined.includes('PURPOSE:'),
+      'Query steps must include PURPOSE: lines');
+    assert.ok(joined.includes('USE THIS TO:'),
+      'Query steps must include USE THIS TO: lines');
+  }
+}
+
+function assertNoOldDelimiters(joined) {
+  assert.ok(!joined.includes('--- MCP STATE MANAGEMENT ---'),
+    'Old delimiter format must not appear');
+  assert.ok(!joined.includes('--- END MCP STATE ---'),
+    'Old end delimiter format must not appear');
+}
+
+// === mcpStateInstructions ===
+
 describe('mcpStateInstructions', () => {
   it('returns an array of strings', () => {
     const result = mcpStateInstructions({ runId: 1, phase: 'design', resultType: 'context_exploration' });
@@ -29,6 +76,17 @@ describe('mcpStateInstructions', () => {
     assert.ok(joined.includes('"fix"'));
   });
 
+  it('uses new delimiter format', () => {
+    const result = mcpStateInstructions({
+      runId: 1, phase: 'tdd', resultType: 'impl',
+      queryInstructions: { getRunSummary: true }
+    });
+    const joined = result.join('\n');
+    assertMandatoryQueryDelimiters(joined);
+    assertRecordingDelimiters(joined);
+    assertNoOldDelimiters(joined);
+  });
+
   it('respects getRunSummary query flag', () => {
     const withFlag = mcpStateInstructions({
       runId: 1, phase: 'tdd', resultType: 'impl',
@@ -42,28 +100,35 @@ describe('mcpStateInstructions', () => {
     assert.ok(!withoutFlag.join('\n').includes('get_run_summary'));
   });
 
-  it('respects searchDecisions query flag', () => {
+  it('respects searchDecisions query flag with get_results follow-up', () => {
     const result = mcpStateInstructions({
       runId: 1, phase: 'tdd', resultType: 'impl',
       queryInstructions: { searchDecisions: true }
     });
-    assert.ok(result.join('\n').includes('result_type="decision"'));
+    const joined = result.join('\n');
+    assert.ok(joined.includes('result_type="decision"'));
+    assertGetResultsFollowsSearch(joined);
+    assertPurposeLines(joined);
   });
 
-  it('respects searchPhase query flag', () => {
+  it('respects searchPhase query flag with get_results follow-up', () => {
     const result = mcpStateInstructions({
       runId: 1, phase: 'verification', resultType: 'verification',
       queryInstructions: { searchPhase: 'tdd' }
     });
-    assert.ok(result.join('\n').includes('phase="tdd"'));
+    const joined = result.join('\n');
+    assert.ok(joined.includes('phase="tdd"'));
+    assertGetResultsFollowsSearch(joined);
   });
 
-  it('respects searchResultType query flag', () => {
+  it('respects searchResultType query flag with get_results follow-up', () => {
     const result = mcpStateInstructions({
       runId: 1, phase: 'tdd', resultType: 'impl',
       queryInstructions: { searchResultType: 'decision' }
     });
-    assert.ok(result.join('\n').includes('result_type="decision"'));
+    const joined = result.join('\n');
+    assert.ok(joined.includes('result_type="decision"'));
+    assertGetResultsFollowsSearch(joined);
   });
 
   it('includes custom query instructions', () => {
@@ -73,7 +138,21 @@ describe('mcpStateInstructions', () => {
     });
     assert.ok(result.join('\n').includes('Custom instruction line'));
   });
+
+  it('includes stateContextUsed in recording section', () => {
+    const result = mcpStateInstructions({ runId: 1, phase: 'design', resultType: 'context_exploration' });
+    assertStateContextUsed(result.join('\n'));
+  });
+
+  it('omits query section when no query instructions provided', () => {
+    const result = mcpStateInstructions({ runId: 1, phase: 'design', resultType: 'context_exploration' });
+    const joined = result.join('\n');
+    assert.ok(!joined.includes('=== MANDATORY STATE QUERY'));
+    assertRecordingDelimiters(joined);
+  });
 });
+
+// === mcpImplementerInstructions ===
 
 describe('mcpImplementerInstructions', () => {
   it('returns an array of strings', () => {
@@ -101,7 +180,28 @@ describe('mcpImplementerInstructions', () => {
     assert.ok(joined.includes('result_type="implementation"'));
     assert.ok(joined.includes('result_type="decision"'));
   });
+
+  it('uses new delimiter format', () => {
+    const joined = mcpImplementerInstructions(1, 1, 'Task').join('\n');
+    assertMandatoryQueryDelimiters(joined);
+    assertRecordingDelimiters(joined);
+    assertNoOldDelimiters(joined);
+  });
+
+  it('includes get_results after every search_results', () => {
+    assertGetResultsFollowsSearch(mcpImplementerInstructions(1, 1, 'Task').join('\n'));
+  });
+
+  it('includes PURPOSE and USE THIS TO lines', () => {
+    assertPurposeLines(mcpImplementerInstructions(1, 1, 'Task').join('\n'));
+  });
+
+  it('includes stateContextUsed in recording section', () => {
+    assertStateContextUsed(mcpImplementerInstructions(1, 1, 'Task').join('\n'));
+  });
 });
+
+// === mcpReviewerInstructions ===
 
 describe('mcpReviewerInstructions', () => {
   it('returns an array of strings', () => {
@@ -130,7 +230,28 @@ describe('mcpReviewerInstructions', () => {
     assert.ok(joined.includes('3'));
     assert.ok(joined.includes('Widget'));
   });
+
+  it('uses new delimiter format', () => {
+    const joined = mcpReviewerInstructions(1, 1, 'Task', 'spec').join('\n');
+    assertMandatoryQueryDelimiters(joined);
+    assertRecordingDelimiters(joined);
+    assertNoOldDelimiters(joined);
+  });
+
+  it('includes get_results after every search_results', () => {
+    assertGetResultsFollowsSearch(mcpReviewerInstructions(1, 1, 'Task', 'spec').join('\n'));
+  });
+
+  it('includes PURPOSE and USE THIS TO lines', () => {
+    assertPurposeLines(mcpReviewerInstructions(1, 1, 'Task', 'spec').join('\n'));
+  });
+
+  it('includes stateContextUsed in recording section', () => {
+    assertStateContextUsed(mcpReviewerInstructions(1, 1, 'Task', 'spec').join('\n'));
+  });
 });
+
+// === mcpTddFixerInstructions ===
 
 describe('mcpTddFixerInstructions', () => {
   it('returns an array of strings', () => {
@@ -164,7 +285,28 @@ describe('mcpTddFixerInstructions', () => {
     assert.ok(joined.includes('3'));
     assert.ok(joined.includes('Widget'));
   });
+
+  it('uses new delimiter format', () => {
+    const joined = mcpTddFixerInstructions(1, 1, 'Task', 'spec').join('\n');
+    assertMandatoryQueryDelimiters(joined);
+    assertRecordingDelimiters(joined);
+    assertNoOldDelimiters(joined);
+  });
+
+  it('includes get_results after every search_results', () => {
+    assertGetResultsFollowsSearch(mcpTddFixerInstructions(1, 1, 'Task', 'spec').join('\n'));
+  });
+
+  it('includes PURPOSE and USE THIS TO lines', () => {
+    assertPurposeLines(mcpTddFixerInstructions(1, 1, 'Task', 'spec').join('\n'));
+  });
+
+  it('includes stateContextUsed in recording section', () => {
+    assertStateContextUsed(mcpTddFixerInstructions(1, 1, 'Task', 'spec').join('\n'));
+  });
 });
+
+// === mcpFixInstructions ===
 
 describe('mcpFixInstructions', () => {
   it('returns an array of strings', () => {
@@ -187,7 +329,28 @@ describe('mcpFixInstructions', () => {
     assert.ok(joined.includes('"fix"'));
     assert.ok(joined.includes('"debugging"'));
   });
+
+  it('uses new delimiter format', () => {
+    const joined = mcpFixInstructions(1).join('\n');
+    assertMandatoryQueryDelimiters(joined);
+    assertRecordingDelimiters(joined);
+    assertNoOldDelimiters(joined);
+  });
+
+  it('includes get_results after every search_results', () => {
+    assertGetResultsFollowsSearch(mcpFixInstructions(1).join('\n'));
+  });
+
+  it('includes PURPOSE and USE THIS TO lines', () => {
+    assertPurposeLines(mcpFixInstructions(1).join('\n'));
+  });
+
+  it('includes stateContextUsed in recording section', () => {
+    assertStateContextUsed(mcpFixInstructions(1).join('\n'));
+  });
 });
+
+// === mcpDebuggingInstructions ===
 
 describe('mcpDebuggingInstructions', () => {
   it('returns an array of strings', () => {
@@ -225,5 +388,24 @@ describe('mcpDebuggingInstructions', () => {
     const result = mcpDebuggingInstructions(99);
     const joined = result.join('\n');
     assert.ok(joined.includes('99'));
+  });
+
+  it('uses new delimiter format', () => {
+    const joined = mcpDebuggingInstructions(1).join('\n');
+    assertMandatoryQueryDelimiters(joined);
+    assertRecordingDelimiters(joined);
+    assertNoOldDelimiters(joined);
+  });
+
+  it('includes get_results after every search_results', () => {
+    assertGetResultsFollowsSearch(mcpDebuggingInstructions(1).join('\n'));
+  });
+
+  it('includes PURPOSE and USE THIS TO lines', () => {
+    assertPurposeLines(mcpDebuggingInstructions(1).join('\n'));
+  });
+
+  it('includes stateContextUsed in recording section', () => {
+    assertStateContextUsed(mcpDebuggingInstructions(1).join('\n'));
   });
 });

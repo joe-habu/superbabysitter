@@ -26,7 +26,7 @@ export const contextExplorerTask = defineTask('context-explorer', (args, taskCtx
         'Summarize findings for design proposal',
         ...(args.mcpInstructions || [])
       ],
-      outputFormat: 'JSON with patterns, conventions, constraints, integrationPoints, runId (if you created a new run)'
+      outputFormat: 'JSON with patterns, conventions, constraints, integrationPoints, priorRunInsights (array of strings from prior runs, empty if none), runId (if you created a new run)'
     },
     outputSchema: {
       type: 'object',
@@ -36,6 +36,7 @@ export const contextExplorerTask = defineTask('context-explorer', (args, taskCtx
         conventions: { type: 'array', items: { type: 'string' } },
         constraints: { type: 'array', items: { type: 'string' } },
         integrationPoints: { type: 'array', items: { type: 'string' } },
+        priorRunInsights: { type: 'array', items: { type: 'string' } },
         runId: { type: 'number' }
       }
     }
@@ -92,13 +93,33 @@ export async function designGate(inputs, ctx) {
 
   // Create MCP run for persistent state tracking
   const runId = inputs.runId || null;
+  const project = inputs.project || inputs.codebasePath || '.';
   const mcpCreateInstructions = runId ? [] : [
     '',
-    '--- MCP STATE MANAGEMENT ---',
-    `FIRST: Call create_run(feature="${inputs.feature}", project="${inputs.project || inputs.codebasePath || '.'}") to start tracking this workflow.`,
-    'Record the returned run_id - it will be used throughout this workflow.',
-    'AFTER COMPLETING: Call record_result with run_id, phase="design", result_type="context_exploration"',
-    '--- END MCP STATE ---',
+    '=== MANDATORY STATE QUERY (DO THIS FIRST, BEFORE ANY OTHER WORK) ===',
+    `1. Call search_prior_runs(project="${project}", feature="${inputs.feature}")`,
+    '   PURPOSE: Find prior workflow runs for this project/feature.',
+    '   USE THIS TO: Learn from previous attempts - what worked, what failed, what decisions were made.',
+    '',
+    '2. If prior runs exist, call get_run_summary(run_id=<most recent run ID>) to get its summary.',
+    '   THEN: Call search_results(run_id=<that run ID>, result_type="decision")',
+    '   THEN: Call get_results(ids=[...IDs from search]) to fetch full architectural decisions.',
+    '   PURPOSE: Recover prior architectural decisions with full rationale.',
+    '   USE THIS TO: Carry forward good decisions and avoid repeating mistakes.',
+    '=== END MANDATORY STATE QUERY ===',
+    '',
+    `3. Call create_run(feature="${inputs.feature}", project="${project}") to start tracking this workflow.`,
+    '   Record the returned run_id - it will be used throughout this workflow.',
+    '',
+    '=== STATE RECORDING (DO THIS AFTER COMPLETING YOUR WORK) ===',
+    'Call record_result with:',
+    '  run_id: <the run_id from create_run>',
+    '  phase: "design"',
+    '  result_type: "context_exploration"',
+    '  title: (brief title of context exploration)',
+    '  narrative: (detailed findings)',
+    '  stateContextUsed: (what you learned from prior runs and how it influenced your exploration)',
+    '=== END STATE RECORDING ===',
     ''
   ];
 
