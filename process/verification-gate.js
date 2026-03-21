@@ -61,7 +61,7 @@ export async function verificationGate(inputs, ctx) {
         runId,
         phase: 'verification',
         resultType: 'verification',
-        queryInstructions: { getRunSummary: true, searchPhase: 'tdd' }
+        queryInstructions: { getRunSummary: true, searchPhase: 'tdd', searchDecisions: true }
       })
     : [];
 

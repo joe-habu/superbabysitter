@@ -127,7 +127,7 @@ export async function designGate(inputs, ctx) {
     feature: inputs.feature,
     codebasePath: inputs.codebasePath,
     mcpInstructions: runId
-      ? mcpStateInstructions({ runId, phase: 'design', resultType: 'context_exploration' })
+      ? mcpStateInstructions({ runId, phase: 'design', resultType: 'context_exploration', queryInstructions: { getRunSummary: true, searchDecisions: true } })
       : mcpCreateInstructions
   });
 
@@ -139,7 +139,7 @@ export async function designGate(inputs, ctx) {
         runId: effectiveRunId,
         phase: 'design',
         resultType: 'design_proposal',
-        queryInstructions: { searchPhase: 'design' }
+        queryInstructions: { searchPhase: 'design', searchDecisions: true, getRunSummary: true }
       })
     : [];
 

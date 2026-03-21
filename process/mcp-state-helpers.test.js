@@ -6,7 +6,8 @@ import {
   mcpReviewerInstructions,
   mcpTddFixerInstructions,
   mcpFixInstructions,
-  mcpDebuggingInstructions
+  mcpDebuggingInstructions,
+  mcpFinishingInstructions
 } from './mcp-state-helpers.js';
 
 // === Shared assertion helpers ===
@@ -407,5 +408,172 @@ describe('mcpDebuggingInstructions', () => {
 
   it('includes stateContextUsed in recording section', () => {
     assertStateContextUsed(mcpDebuggingInstructions(1).join('\n'));
+  });
+
+  it('includes get_timeline for chronological context', () => {
+    const joined = mcpDebuggingInstructions(1).join('\n');
+    assert.ok(joined.includes('get_timeline'), 'Debugging instructions must include get_timeline');
+  });
+
+  it('includes facts in recording section', () => {
+    const joined = mcpDebuggingInstructions(1).join('\n');
+    assert.ok(joined.includes('facts:'), 'Debugging recording must include facts field');
+  });
+});
+
+// === mcpFinishingInstructions ===
+
+describe('mcpFinishingInstructions', () => {
+  it('returns an array of strings', () => {
+    const result = mcpFinishingInstructions(1);
+    assert.ok(Array.isArray(result));
+    result.forEach(item => assert.equal(typeof item, 'string'));
+  });
+
+  it('includes runId in instructions', () => {
+    const result = mcpFinishingInstructions(42);
+    const joined = result.join('\n');
+    assert.ok(joined.includes('42'));
+  });
+
+  it('includes complete_run instruction', () => {
+    const joined = mcpFinishingInstructions(1).join('\n');
+    assert.ok(joined.includes('complete_run'), 'Finishing instructions must include complete_run');
+  });
+
+  it('uses new delimiter format', () => {
+    const joined = mcpFinishingInstructions(1).join('\n');
+    assertMandatoryQueryDelimiters(joined);
+    assertRecordingDelimiters(joined);
+    assertNoOldDelimiters(joined);
+  });
+
+  it('includes get_results after every search_results', () => {
+    assertGetResultsFollowsSearch(mcpFinishingInstructions(1).join('\n'));
+  });
+
+  it('includes PURPOSE and USE THIS TO lines', () => {
+    assertPurposeLines(mcpFinishingInstructions(1).join('\n'));
+  });
+
+  it('includes stateContextUsed in recording section', () => {
+    assertStateContextUsed(mcpFinishingInstructions(1).join('\n'));
+  });
+
+  it('includes facts in recording section', () => {
+    const joined = mcpFinishingInstructions(1).join('\n');
+    assert.ok(joined.includes('facts:'), 'Finishing recording must include facts field');
+  });
+
+  it('queries tdd phase and decisions', () => {
+    const joined = mcpFinishingInstructions(1).join('\n');
+    assert.ok(joined.includes('phase="tdd"'), 'Must query tdd phase results');
+    assert.ok(joined.includes('result_type="decision"'), 'Must query decisions');
+  });
+
+  it('includes consequence warning', () => {
+    const joined = mcpFinishingInstructions(1).join('\n');
+    assert.ok(joined.includes('WARNING: Skipping'),
+      'Finishing instructions must include consequence warning');
+  });
+});
+
+// === Cross-cutting tests for all helpers ===
+
+describe('all helpers - consequence warning', () => {
+  it('mcpStateInstructions includes warning when queries present', () => {
+    const joined = mcpStateInstructions({
+      runId: 1, phase: 'tdd', resultType: 'impl',
+      queryInstructions: { getRunSummary: true }
+    }).join('\n');
+    assert.ok(joined.includes('WARNING: Skipping'),
+      'mcpStateInstructions must include consequence warning');
+  });
+
+  it('mcpImplementerInstructions includes warning', () => {
+    const joined = mcpImplementerInstructions(1, 1, 'Task').join('\n');
+    assert.ok(joined.includes('WARNING: Skipping'),
+      'mcpImplementerInstructions must include consequence warning');
+  });
+
+  it('mcpReviewerInstructions includes warning', () => {
+    const joined = mcpReviewerInstructions(1, 1, 'Task', 'spec').join('\n');
+    assert.ok(joined.includes('WARNING: Skipping'),
+      'mcpReviewerInstructions must include consequence warning');
+  });
+
+  it('mcpTddFixerInstructions includes warning', () => {
+    const joined = mcpTddFixerInstructions(1, 1, 'Task', 'spec').join('\n');
+    assert.ok(joined.includes('WARNING: Skipping'),
+      'mcpTddFixerInstructions must include consequence warning');
+  });
+
+  it('mcpFixInstructions includes warning', () => {
+    const joined = mcpFixInstructions(1).join('\n');
+    assert.ok(joined.includes('WARNING: Skipping'),
+      'mcpFixInstructions must include consequence warning');
+  });
+
+  it('mcpDebuggingInstructions includes warning', () => {
+    const joined = mcpDebuggingInstructions(1).join('\n');
+    assert.ok(joined.includes('WARNING: Skipping'),
+      'mcpDebuggingInstructions must include consequence warning');
+  });
+
+  it('mcpFinishingInstructions includes warning', () => {
+    const joined = mcpFinishingInstructions(1).join('\n');
+    assert.ok(joined.includes('WARNING: Skipping'),
+      'mcpFinishingInstructions must include consequence warning');
+  });
+});
+
+describe('all helpers - facts field in recording', () => {
+  it('mcpStateInstructions includes facts', () => {
+    const joined = mcpStateInstructions({ runId: 1, phase: 'tdd', resultType: 'impl' }).join('\n');
+    assert.ok(joined.includes('facts:'), 'mcpStateInstructions recording must include facts');
+  });
+
+  it('mcpImplementerInstructions includes facts', () => {
+    const joined = mcpImplementerInstructions(1, 1, 'Task').join('\n');
+    assert.ok(joined.includes('facts:'), 'mcpImplementerInstructions recording must include facts');
+  });
+
+  it('mcpReviewerInstructions includes facts', () => {
+    const joined = mcpReviewerInstructions(1, 1, 'Task', 'spec').join('\n');
+    assert.ok(joined.includes('facts:'), 'mcpReviewerInstructions recording must include facts');
+  });
+
+  it('mcpTddFixerInstructions includes facts', () => {
+    const joined = mcpTddFixerInstructions(1, 1, 'Task', 'spec').join('\n');
+    assert.ok(joined.includes('facts:'), 'mcpTddFixerInstructions recording must include facts');
+  });
+
+  it('mcpFixInstructions includes facts', () => {
+    const joined = mcpFixInstructions(1).join('\n');
+    assert.ok(joined.includes('facts:'), 'mcpFixInstructions recording must include facts');
+  });
+
+  it('mcpDebuggingInstructions includes facts', () => {
+    const joined = mcpDebuggingInstructions(1).join('\n');
+    assert.ok(joined.includes('facts:'), 'mcpDebuggingInstructions recording must include facts');
+  });
+
+  it('mcpFinishingInstructions includes facts', () => {
+    const joined = mcpFinishingInstructions(1).join('\n');
+    assert.ok(joined.includes('facts:'), 'mcpFinishingInstructions recording must include facts');
+  });
+});
+
+describe('mcpImplementerInstructions - mid-task recording', () => {
+  it('includes mid-task recording section', () => {
+    const joined = mcpImplementerInstructions(1, 1, 'Task').join('\n');
+    assert.ok(joined.includes('MID-TASK RECORDING'),
+      'Implementer instructions must include mid-task recording section');
+  });
+
+  it('mid-task recording uses decision result type', () => {
+    const joined = mcpImplementerInstructions(1, 1, 'Task').join('\n');
+    assert.ok(joined.includes('result_type: "decision"'),
+      'Mid-task recording must record as decision type');
   });
 });

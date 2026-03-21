@@ -27,7 +27,9 @@ export function mcpStateInstructions({ runId, phase, resultType, queryInstructio
   if (hasAnyQuery) {
     instructions.push(
       '',
-      '=== MANDATORY STATE QUERY (DO THIS FIRST, BEFORE ANY OTHER WORK) ==='
+      '=== MANDATORY STATE QUERY (DO THIS FIRST, BEFORE ANY OTHER WORK) ===',
+      'WARNING: Skipping these queries means you will duplicate work, contradict decisions,',
+      'or miss context that other agents recorded. Query FIRST, then work.'
     );
 
     let step = 1;
@@ -90,6 +92,7 @@ export function mcpStateInstructions({ runId, phase, resultType, queryInstructio
     '  files_changed: (array of file paths you modified)',
     '  architectural_decisions: (array of decisions you made)',
     '  concerns: (array of open concerns)',
+    '  facts: (array of key factual discoveries - things that would save the next agent time)',
     '  stateContextUsed: (what you learned from state queries and how it influenced your work)',
     '=== END STATE RECORDING ===',
     ''
@@ -106,6 +109,8 @@ export function mcpImplementerInstructions(runId, taskNumber, taskName) {
   return [
     '',
     '=== MANDATORY STATE QUERY (DO THIS FIRST, BEFORE ANY OTHER WORK) ===',
+    'WARNING: Skipping these queries means you will duplicate work, contradict decisions,',
+    'or miss context that other agents recorded. Query FIRST, then work.',
     `1. Call get_run_summary(run_id=${runId})`,
     '   PURPOSE: Get a condensed view of completed tasks, decisions, and files changed so far.',
     '   USE THIS TO: Understand where your task fits in the overall implementation.',
@@ -121,6 +126,14 @@ export function mcpImplementerInstructions(runId, taskNumber, taskName) {
     '   USE THIS TO: Reuse helpers/patterns from earlier tasks. Avoid duplicating work.',
     '=== END MANDATORY STATE QUERY ===',
     '',
+    '=== MID-TASK RECORDING (DO THIS AS YOU WORK) ===',
+    'When you make an architectural decision during implementation, record it immediately:',
+    '  Call record_result with:',
+    `    run_id: ${runId}, phase: "tdd", result_type: "decision"`,
+    '    title: (the decision), narrative: (why you chose this approach)',
+    'This makes your decision visible to the NEXT agent without waiting for your task to complete.',
+    '=== END MID-TASK RECORDING ===',
+    '',
     '=== STATE RECORDING (DO THIS AFTER COMPLETING YOUR WORK) ===',
     'Call record_result with:',
     `  run_id: ${runId}`,
@@ -134,6 +147,7 @@ export function mcpImplementerInstructions(runId, taskNumber, taskName) {
     '  files_read: (array of file paths you read for context)',
     '  architectural_decisions: (array of any decisions you made)',
     '  concerns: (array of open concerns or risks)',
+    '  facts: (array of key factual discoveries - things that would save the next agent time)',
     `  dependencies: (array of task numbers this depends on)`,
     '  stateContextUsed: (what you learned from state queries and how it influenced your work)',
     '=== END STATE RECORDING ===',
@@ -148,6 +162,8 @@ export function mcpReviewerInstructions(runId, taskNumber, taskName, reviewType)
   return [
     '',
     '=== MANDATORY STATE QUERY (DO THIS FIRST, BEFORE ANY OTHER WORK) ===',
+    'WARNING: Skipping these queries means you will duplicate work, contradict decisions,',
+    'or miss context that other agents recorded. Query FIRST, then work.',
     `1. Call search_results(run_id=${runId}, result_type="implementation", task_number=${taskNumber})`,
     '   THEN: Call get_results(ids=[...IDs from search]) to fetch full details.',
     '   PURPOSE: See the full narrative and files changed for the implementation you are reviewing.',
@@ -169,6 +185,7 @@ export function mcpReviewerInstructions(runId, taskNumber, taskName, reviewType)
     `  title: "${reviewType} review for task ${taskNumber}"`,
     '  status: "pass" or "fail"',
     '  review_issues: (array of issues found, empty if pass)',
+    '  facts: (array of key factual discoveries - things that would save the next agent time)',
     '  stateContextUsed: (what you learned from state queries and how it influenced your review)',
     '=== END STATE RECORDING ===',
     ''
@@ -184,6 +201,8 @@ export function mcpTddFixerInstructions(runId, taskNumber, taskName, reviewType)
   return [
     '',
     '=== MANDATORY STATE QUERY (DO THIS FIRST, BEFORE ANY OTHER WORK) ===',
+    'WARNING: Skipping these queries means you will duplicate work, contradict decisions,',
+    'or miss context that other agents recorded. Query FIRST, then work.',
     `1. Call get_run_summary(run_id=${runId})`,
     '   PURPOSE: Get the full picture of the run including completed tasks and decisions.',
     '   USE THIS TO: Understand the broader context of what you are fixing.',
@@ -204,6 +223,7 @@ export function mcpTddFixerInstructions(runId, taskNumber, taskName, reviewType)
     '  title: (brief description of what you fixed)',
     '  narrative: (detailed description of the fix)',
     '  files_changed: (array of file paths you modified)',
+    '  facts: (array of key factual discoveries - things that would save the next agent time)',
     '  stateContextUsed: (what you learned from state queries and how it influenced your fix)',
     '=== END STATE RECORDING ===',
     ''
@@ -218,6 +238,8 @@ export function mcpFixInstructions(runId) {
   return [
     '',
     '=== MANDATORY STATE QUERY (DO THIS FIRST, BEFORE ANY OTHER WORK) ===',
+    'WARNING: Skipping these queries means you will duplicate work, contradict decisions,',
+    'or miss context that other agents recorded. Query FIRST, then work.',
     `1. Call get_run_summary(run_id=${runId})`,
     '   PURPOSE: Get the full picture of the run including what debugging has uncovered.',
     '   USE THIS TO: Understand the root cause chain that led to this fix.',
@@ -246,6 +268,7 @@ export function mcpFixInstructions(runId) {
     '  title: (brief description of what you fixed)',
     '  narrative: (detailed description of the fix and regression test)',
     '  files_changed: (array of file paths you modified)',
+    '  facts: (array of key factual discoveries - things that would save the next agent time)',
     '  stateContextUsed: (what you learned from state queries and how it influenced your fix)',
     '=== END STATE RECORDING ===',
     ''
@@ -259,6 +282,8 @@ export function mcpDebuggingInstructions(runId, resultType = 'debug_investigatio
   return [
     '',
     '=== MANDATORY STATE QUERY (DO THIS FIRST, BEFORE ANY OTHER WORK) ===',
+    'WARNING: Skipping these queries means you will duplicate work, contradict decisions,',
+    'or miss context that other agents recorded. Query FIRST, then work.',
     `1. Call get_run_summary(run_id=${runId})`,
     '   PURPOSE: Get a condensed view of the entire run state.',
     '   USE THIS TO: Orient yourself on what has been built and where failures occurred.',
@@ -277,6 +302,10 @@ export function mcpDebuggingInstructions(runId, resultType = 'debug_investigatio
     '   THEN: Call get_results(ids=[...IDs from search]) to fetch full details.',
     '   PURPOSE: See verification results with full evidence of what passed and failed.',
     '   USE THIS TO: Focus your investigation on the specific failures identified.',
+    '',
+    `5. Call get_timeline(run_id=${runId}, query="fail")`,
+    '   PURPOSE: See chronological context around failures - what happened before/after.',
+    '   USE THIS TO: Identify causal chains and temporal patterns.',
     '=== END MANDATORY STATE QUERY ===',
     '',
     '=== STATE RECORDING (DO THIS AFTER COMPLETING YOUR WORK) ===',
@@ -286,7 +315,51 @@ export function mcpDebuggingInstructions(runId, resultType = 'debug_investigatio
     `  result_type: "${resultType}"`,
     '  title: (brief description of what you found)',
     '  narrative: (detailed hypothesis and evidence)',
+    '  facts: (array of key factual discoveries - things that would save the next agent time)',
     '  stateContextUsed: (what you learned from state queries and how it influenced your investigation)',
+    '=== END STATE RECORDING ===',
+    ''
+  ];
+}
+
+/**
+ * Generate MCP instructions for the finishing gate.
+ * Includes complete_run to close the run so search_prior_runs returns it with an outcome.
+ */
+export function mcpFinishingInstructions(runId) {
+  return [
+    '',
+    '=== MANDATORY STATE QUERY (DO THIS FIRST, BEFORE ANY OTHER WORK) ===',
+    'WARNING: Skipping these queries means you will duplicate work, contradict decisions,',
+    'or miss context that other agents recorded. Query FIRST, then work.',
+    `1. Call get_run_summary(run_id=${runId})`,
+    '   PURPOSE: Get a condensed view of the entire run including all phases.',
+    '   USE THIS TO: Understand what was built and tested before running final verification.',
+    '',
+    `2. Call search_results(run_id=${runId}, phase="tdd")`,
+    '   THEN: Call get_results(ids=[...IDs from search]) to fetch full details.',
+    '   PURPOSE: See all implementation results including files changed.',
+    '   USE THIS TO: Know what code to test and what test commands to run.',
+    '',
+    `3. Call search_results(run_id=${runId}, result_type="decision")`,
+    '   THEN: Call get_results(ids=[...IDs from search]) to fetch full details.',
+    '   PURPOSE: See architectural decisions that inform what to verify.',
+    '   USE THIS TO: Ensure test coverage matches the decisions made.',
+    '=== END MANDATORY STATE QUERY ===',
+    '',
+    '=== STATE RECORDING (DO THIS AFTER COMPLETING YOUR WORK) ===',
+    'Call record_result with:',
+    `  run_id: ${runId}`,
+    '  phase: "finishing"',
+    '  result_type: "verification"',
+    '  title: (brief title of test results)',
+    '  narrative: (detailed test output and results)',
+    '  facts: (array of key factual discoveries - things that would save the next agent time)',
+    '  stateContextUsed: (what you learned from state queries and how it influenced your work)',
+    '',
+    `THEN: Call complete_run(run_id=${runId}, status="completed"|"failed", outcome="<summary of final state>")`,
+    '  PURPOSE: Close the run so search_prior_runs returns it with an outcome.',
+    '  Use status="completed" if tests pass, "failed" if tests fail.',
     '=== END STATE RECORDING ===',
     ''
   ];

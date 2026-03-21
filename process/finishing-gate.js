@@ -7,7 +7,7 @@
 
 import { defineTask } from '@a5c-ai/babysitter-sdk';
 import { debuggingPhase } from './debugging-phase.js';
-import { mcpStateInstructions } from './mcp-state-helpers.js';
+import { mcpFinishingInstructions } from './mcp-state-helpers.js';
 
 // === TASK DEFINITIONS ===
 
@@ -52,12 +52,7 @@ export async function finishingGate(inputs, ctx, attempt = 1) {
 
   const runId = inputs.runId;
   const mcpInstructions = runId
-    ? mcpStateInstructions({
-        runId,
-        phase: 'finishing',
-        resultType: 'test_run',
-        queryInstructions: { getRunSummary: true }
-      })
+    ? mcpFinishingInstructions(runId)
     : [];
 
   const finalTests = await ctx.task(testRunnerTask, {

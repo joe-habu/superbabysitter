@@ -92,7 +92,7 @@ export async function planningGate(inputs, ctx) {
         runId,
         phase: 'planning',
         resultType: 'plan',
-        queryInstructions: { searchPhase: 'design', getRunSummary: true }
+        queryInstructions: { searchPhase: 'design', getRunSummary: true, searchDecisions: true }
       })
     : [];
 
@@ -101,7 +101,7 @@ export async function planningGate(inputs, ctx) {
         runId,
         phase: 'planning',
         resultType: 'verification',
-        queryInstructions: { searchPhase: 'planning' }
+        queryInstructions: { searchPhase: 'planning', getRunSummary: true, searchDecisions: true }
       })
     : [];
 
