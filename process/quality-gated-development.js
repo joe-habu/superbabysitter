@@ -109,8 +109,15 @@ export async function process(inputs, ctx) {
 
   await finishingGate({ runId }, ctx);
 
-  // Mark the MCP run as completed
-  // (Agent in finishing gate should call complete_run, but we ensure it here as fallback)
+  // Ensure MCP run is marked complete (fallback if finishing gate agent didn't do it)
+  if (runId) {
+    await ctx.task({
+      name: 'mcp-run-closer',
+      instructions: [`Call complete_run(run_id=${runId}, status="completed", outcome="Workflow finished")`],
+      outputFormat: 'Confirm complete_run was called',
+      outputSchema: { type: 'object', properties: { completed: { type: 'boolean' } } }
+    });
+  }
 
   return {
     success: true,

@@ -42,13 +42,11 @@ const specReviewerInstructions = [
   'Check for MISSING requirements: Did they implement everything requested? Are there requirements they skipped?',
   'Check for EXTRA work: Did they build things not requested? Did they over-engineer?',
   'Check for MISUNDERSTANDINGS: Did they interpret requirements differently than intended? Did they solve the wrong problem?',
-  'CONTEXT: You MUST call search_results(result_type="implementation") and search_results(result_type="decision"), then call get_results(ids=[...]) to fetch full details. This tells you what prior tasks built and what patterns to follow. Skipping this means you will miss context and make incorrect judgments.',
   'Report: PASS or FAIL with specific issues and file:line references for each issue found.'
 ];
 
 const qualityReviewerInstructions = [
   'IRON LAW: Do NOT trust the implementer report. Read actual code.',
-  'CONTEXT: You MUST call search_results(result_type="decision"), then call get_results(ids=[...]) to fetch full architectural decisions with rationale. Skipping this means you will miss established patterns and make incorrect quality judgments.',
   'Review: code cleanliness, naming accuracy (names match what things do, not how they work), maintainability, test quality (tests verify behavior, not mock behavior).',
   'Classify issues by severity: Critical (breaks correctness, security, or architecture), Important (significant quality concern), Minor (style, preference).',
   'Only FAIL for Critical or Important issues. Minor issues should be noted but not block progress.',

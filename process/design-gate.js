@@ -132,7 +132,7 @@ export async function designGate(inputs, ctx) {
   });
 
   // Extract runId from context result if it was created by the agent
-  const effectiveRunId = runId || contextResult.runId || ctx.runId;
+  const effectiveRunId = runId || contextResult.runId || null;
 
   const designMcpInstructions = effectiveRunId
     ? mcpStateInstructions({

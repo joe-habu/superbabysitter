@@ -76,11 +76,11 @@ import { subagentTddLoop } from './subagent-tdd-loop.js';
 
 export async function process(inputs, ctx) {
   // Use only the phases you need
-  const { designResult } = await designGate({ feature: inputs.feature, codebasePath: '.' }, ctx);
-  const { planResult } = await planningGate({ feature: inputs.feature, designResult }, ctx);
+  const { designResult, runId } = await designGate({ feature: inputs.feature, codebasePath: '.' }, ctx);
+  const { planResult } = await planningGate({ feature: inputs.feature, designResult, runId }, ctx);
   const { completedTasks } = await subagentTddLoop(planResult.tasks, runId, ctx);
 
-  return { success: true, tasksCompleted: completedTasks.length };
+  return { success: true, tasksCompleted: completedTasks.length, runId };
 }
 ```
 
