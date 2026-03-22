@@ -83,7 +83,15 @@ export async function finishingGate(inputs, ctx, attempt = 1) {
     } else {
       const details = finalTests.failureDetails || finalTests.output || `${finalTests.failed} test(s) failed out of ${finalTests.total}`;
       log(`Tests failing: ${finalTests.failed} failures. Triggering debugging phase.`);
-      await debuggingPhase(ctx, `Test failures: ${details}`, 1, runId);
+      await debuggingPhase(ctx, {
+        description: `Test failures: ${details}`,
+        testResults: {
+          passed: finalTests.passed,
+          failed: finalTests.failed,
+          total: finalTests.total,
+          failureDetails: finalTests.failureDetails
+        }
+      }, 1, runId);
 
       // Re-run tests after fix
       return await finishingGate(inputs, ctx, attempt + 1);

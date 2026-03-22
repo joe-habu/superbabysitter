@@ -74,7 +74,10 @@ export async function process(inputs, ctx) {
       log(`Phase 5: Debugging Phase (re-verify attempt ${reverifyAttempt}/${MAX_REVERIFY_ATTEMPTS})`);
 
       for (const failedReq of currentVerification.requirements.filter(r => r.verdict !== 'PASS')) {
-        await debuggingPhase(ctx, `Requirement failed: ${failedReq.requirement}\nEvidence: ${failedReq.output}`, 1, runId);
+        await debuggingPhase(ctx, {
+          description: `Requirement failed: ${failedReq.requirement}`,
+          structuredFailure: failedReq
+        }, 1, runId);
       }
 
       const reVerification = await verificationGate({ feature, planResult, runId }, ctx);

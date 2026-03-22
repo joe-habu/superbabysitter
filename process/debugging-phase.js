@@ -9,17 +9,55 @@ import { defineTask } from '@a5c-ai/babysitter-sdk';
 import { subagentImplementerTask } from './subagent-tdd-loop.js';
 import { mcpDebuggingInstructions, mcpFixInstructions } from './mcp-state-helpers.js';
 
+// === HELPER FUNCTIONS ===
+
+export function normalizeIssue(issue) {
+  if (!issue) return { description: '' };
+  if (typeof issue === 'string') return { description: issue };
+  return issue;
+}
+
+export function buildPriorAttemptsInstructions(priorAttempts) {
+  if (!priorAttempts || priorAttempts.length === 0) return [];
+  return [
+    '=== PRIOR DEBUGGING ATTEMPTS (DO NOT REPEAT) ===',
+    ...priorAttempts.map(pa => [
+      `Attempt ${pa.attempt}:`,
+      `  Hypothesis: ${pa.rootCauseHypothesis || 'unknown'}`,
+      `  Evidence: ${(pa.rootCauseEvidence || []).join(', ') || 'none'}`,
+      `  Pattern differences: ${(pa.patternDifferences || []).join(', ') || 'none'}`,
+      `  Hypothesis test: ${pa.hypothesisTest || 'unknown'}`,
+      `  Confirmed: ${pa.confirmed}`,
+    ].join('\n')),
+    '=== END PRIOR ATTEMPTS ===',
+    'You MUST investigate a DIFFERENT root cause hypothesis. Do NOT repeat the above.'
+  ];
+}
+
+export function buildEscalationHistory(allAttempts) {
+  if (!allAttempts || allAttempts.length === 0) return [];
+  return [
+    'Investigation History:',
+    ...allAttempts.map(pa =>
+      `  Attempt ${pa.attempt}: "${pa.rootCauseHypothesis || 'unknown'}" -> ${pa.confirmed ? 'CONFIRMED' : 'NOT CONFIRMED'}`
+    )
+  ];
+}
+
 // === TASK DEFINITIONS ===
 
 export const rootCauseInvestigationTask = defineTask('root-cause-investigation', (args, taskCtx) => ({
   kind: 'agent',
-  title: `Investigate: ${args.issue.substring(0, 50)}...`,
+  title: `Investigate: ${(args.issue || '').substring(0, 50)}...`,
   agent: {
     name: 'general-purpose',
     prompt: {
       role: 'systematic debugger who investigates before fixing',
       task: 'Investigate root cause of issue - do NOT propose fixes',
-      context: { issue: args.issue },
+      context: {
+        issue: args.issue,
+        ...(args.structuredContext || {})
+      },
       instructions: args.instructions,
       outputFormat: 'JSON with hypothesis (string), evidence (array), dataFlow (string), reproducible (boolean)'
     },
@@ -101,9 +139,12 @@ export const hypothesisTestingTask = defineTask('hypothesis-testing', (args, tas
 
 const MAX_DEBUG_ATTEMPTS = 3;
 
-export async function debuggingPhase(ctx, issue, attempt = 1, runId = null) {
+export async function debuggingPhase(ctx, issue, attempt = 1, runId = null, priorAttempts = []) {
   const log = (ctx.log || (() => {})).bind(ctx);
   log(`Phase 5: Debugging Phase (attempt ${attempt}/${MAX_DEBUG_ATTEMPTS})`);
+
+  const normalized = normalizeIssue(issue);
+  const issueDescription = normalized.description;
 
   const mcpRootCauseInstr = runId ? mcpDebuggingInstructions(runId, 'root_cause_investigation') : [];
   const mcpPatternInstr = runId ? mcpDebuggingInstructions(runId, 'pattern_analysis') : [];
@@ -111,7 +152,11 @@ export async function debuggingPhase(ctx, issue, attempt = 1, runId = null) {
 
   // Phase 1: Root cause investigation (REQUIRED before any fix)
   const rootCause = await ctx.task(rootCauseInvestigationTask, {
-    issue,
+    issue: issueDescription,
+    structuredContext: {
+      ...(normalized.structuredFailure && { structuredFailure: normalized.structuredFailure }),
+      ...(normalized.testResults && { testResults: normalized.testResults })
+    },
     instructions: [
       'IRON LAW: No fixes without root cause investigation first.',
       'INVESTIGATE, do not fix.',
@@ -120,13 +165,14 @@ export async function debuggingPhase(ctx, issue, attempt = 1, runId = null) {
       '3. Check recent changes - git diff',
       '4. Trace data flow backward to source',
       'Report hypothesis with evidence, NOT a fix',
+      ...buildPriorAttemptsInstructions(priorAttempts),
       ...mcpRootCauseInstr
     ]
   });
 
   // Phase 2: Pattern analysis
   const pattern = await ctx.task(patternAnalysisTask, {
-    issue, rootCause,
+    issue: issueDescription, rootCause,
     instructions: [
       'Find working examples, compare, list differences',
       'Understand dependencies and assumptions',
@@ -136,7 +182,7 @@ export async function debuggingPhase(ctx, issue, attempt = 1, runId = null) {
 
   // Phase 3: Hypothesis testing
   const hypothesis = await ctx.task(hypothesisTestingTask, {
-    issue, rootCause, pattern,
+    issue: issueDescription, rootCause, pattern,
     instructions: [
       'Form SINGLE hypothesis. Test with SMALLEST change.',
       'ONE variable at a time. Report confirmed or not.',
@@ -149,7 +195,7 @@ export async function debuggingPhase(ctx, issue, attempt = 1, runId = null) {
     const mcpFixInstrs = runId ? mcpFixInstructions(runId) : [];
     const fixResult = await ctx.task(subagentImplementerTask, {
       taskNumber: 0,
-      taskName: `Fix: ${issue.substring(0, 40)}`,
+      taskName: `Fix: ${issueDescription.substring(0, 40)}`,
       taskDescription: `Root cause: ${rootCause.hypothesis}\nFix: ${hypothesis.fix || '(no specific fix suggested -- apply root cause analysis)'}`,
       sceneContext: 'Debugging fix',
       instructions: [
@@ -163,14 +209,25 @@ export async function debuggingPhase(ctx, issue, attempt = 1, runId = null) {
     return fixResult;
   } else {
     // Hypothesis not confirmed - retry with guard
+    const attemptRecord = {
+      attempt,
+      rootCauseHypothesis: rootCause.hypothesis,
+      rootCauseEvidence: rootCause.evidence,
+      patternDifferences: pattern.differences,
+      hypothesisTest: hypothesis.hypothesis,
+      confirmed: false
+    };
+
     if (attempt >= MAX_DEBUG_ATTEMPTS) {
       log(`Debugging exhausted ${MAX_DEBUG_ATTEMPTS} attempts. Escalating to human.`);
+      const allAttempts = [...priorAttempts, attemptRecord];
       await ctx.breakpoint({
         question: [
           `Debugging failed to confirm a root cause after ${MAX_DEBUG_ATTEMPTS} attempts.`,
           '',
-          `Issue: ${issue.substring(0, 200)}`,
-          `Last hypothesis: ${hypothesis.hypothesis}`,
+          `Issue: ${issueDescription.substring(0, 200)}`,
+          '',
+          ...buildEscalationHistory(allAttempts),
           '',
           'Resolve this breakpoint to skip this issue and continue.',
           'To abort, leave the breakpoint unresolved and cancel the run.'
@@ -181,6 +238,6 @@ export async function debuggingPhase(ctx, issue, attempt = 1, runId = null) {
       return undefined;
     }
     log('Hypothesis not confirmed. Returning to root cause investigation.');
-    return await debuggingPhase(ctx, issue, attempt + 1, runId);
+    return await debuggingPhase(ctx, issue, attempt + 1, runId, [...priorAttempts, attemptRecord]);
   }
 }
