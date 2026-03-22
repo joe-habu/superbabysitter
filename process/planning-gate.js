@@ -20,7 +20,7 @@ export const planWriterTask = defineTask('plan-writer', (args, taskCtx) => ({
       task: 'Create detailed implementation plan with bite-sized TDD tasks',
       context: { feature: args.feature, design: args.design },
       instructions: args.instructions,
-      outputFormat: 'JSON with taskCount (number), tasks (array of {name, fullText, context}), planDoc (string)'
+      outputFormat: 'JSON with taskCount (number), tasks (array of {name, fullText, context, dependsOn}), planDoc (string)'
     },
     outputSchema: {
       type: 'object',
@@ -34,7 +34,8 @@ export const planWriterTask = defineTask('plan-writer', (args, taskCtx) => ({
             properties: {
               name: { type: 'string' },
               fullText: { type: 'string' },
-              context: { type: 'string' }
+              context: { type: 'string' },
+              dependsOn: { type: 'array', items: { type: 'number' }, description: '1-based task numbers this task depends on. Empty array means no prerequisites.' }
             }
           }
         },
@@ -119,6 +120,9 @@ export async function planningGate(inputs, ctx) {
         'Each task: write failing test -> verify fail -> implement minimal -> verify pass -> commit',
         'Include exact file paths, complete code, exact commands with expected output',
         'DRY. YAGNI. TDD. Frequent commits.',
+        'DEPENDENCIES: For EACH task, include a dependsOn array of 1-based task numbers that must complete before this task can start.',
+        'dependsOn: [] means no prerequisites and can run immediately in parallel with other independent tasks.',
+        'Tasks that modify the same files MUST depend on each other. When in doubt, declare the dependency (safe) rather than omit it (risky).',
         'Write plan to artifacts/plan.md',
         ...additionalInstructions,
         ...planMcpInstructions,
@@ -135,6 +139,9 @@ export async function planningGate(inputs, ctx) {
         'Check: Is every task truly bite-sized?',
         'Check: Does every task follow TDD?',
         'Check: Are file paths exact and complete?',
+        'Check: Does every task have a dependsOn array?',
+        'Check: Are dependency references valid (1-based, within task count, no self-references)?',
+        'Check: Are dependencies conservative? Tasks that modify the same files MUST depend on each other.',
         'Write verification to artifacts/plan-verification.md',
         ...verifyMcpInstructions
       ]

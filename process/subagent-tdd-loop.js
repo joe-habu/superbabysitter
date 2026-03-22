@@ -7,6 +7,7 @@
 
 import { defineTask } from '@a5c-ai/babysitter-sdk';
 import { mcpImplementerInstructions, mcpReviewerInstructions, mcpTddFixerInstructions } from './mcp-state-helpers.js';
+import { hasParallelCapableTasks, validateDependencies, buildParallelBatches } from './parallel-task-helpers.js';
 
 // === INSTRUCTION CONSTANTS ===
 
@@ -65,7 +66,7 @@ function buildManifestEntry(taskNumber, taskName, implResult) {
   };
 }
 
-function buildSceneContext(task, taskIndex, allTasks, buildManifest) {
+function buildSceneContext(task, taskIndex, allTasks, buildManifest, batchContext) {
   const lines = [];
   const taskNumber = taskIndex + 1;
   const totalTasks = allTasks.length;
@@ -74,8 +75,29 @@ function buildSceneContext(task, taskIndex, allTasks, buildManifest) {
   lines.push(`You are implementing Task ${taskNumber} of ${totalTasks}: "${task.name}"`);
   lines.push('');
 
-  // Upcoming tasks (static - doesn't need MCP)
-  if (taskIndex < totalTasks - 1) {
+  if (batchContext) {
+    // Parallel mode: show concurrent peers and upcoming batches
+    const peers = batchContext.peerTasks.filter(p => p.taskNumber !== taskNumber);
+    if (peers.length > 0) {
+      lines.push('## Running Concurrently (do NOT modify their files)');
+      for (const peer of peers) {
+        lines.push(`- Task ${peer.taskNumber}: ${peer.task.name}`);
+      }
+      lines.push('');
+    }
+    if (batchContext.upcomingBatches && batchContext.upcomingBatches.length > 0) {
+      lines.push('## Upcoming Batches (do NOT implement their work)');
+      for (let b = 0; b < batchContext.upcomingBatches.length; b++) {
+        const batchNum = batchContext.currentBatchIndex + b + 2;
+        lines.push(`Batch ${batchNum}:`);
+        for (const entry of batchContext.upcomingBatches[b]) {
+          lines.push(`  - Task ${entry.taskNumber}: ${entry.task.name}`);
+        }
+      }
+      lines.push('');
+    }
+  } else if (taskIndex < totalTasks - 1) {
+    // Sequential mode: show upcoming tasks
     lines.push('## Upcoming Tasks (do NOT implement their work)');
     for (let i = taskIndex + 1; i < totalTasks; i++) {
       lines.push(`- Task ${i + 1}: ${allTasks[i].name}`);
@@ -261,6 +283,130 @@ export const subagentQualityReviewerTask = defineTask('subagent-quality-reviewer
   }
 }));
 
+// === SINGLE TASK EXECUTION ===
+
+/**
+ * Executes a single task through the full TDD cycle: implement -> spec review loop -> quality review loop.
+ * Used by both sequential and parallel execution paths.
+ * @param {object} task - The task to execute
+ * @param {number} taskNumber - 1-based task number
+ * @param {number} totalTasks - Total number of tasks in the plan
+ * @param {Array} allTasks - All tasks in the plan
+ * @param {Array} buildManifest - Accumulated manifest from prior tasks/batches (frozen snapshot for parallel)
+ * @param {string|null} runId - MCP run ID
+ * @param {object} ctx - Babysitter context
+ * @param {object|null} batchContext - Parallel batch context, null for sequential
+ * @returns {{ name: string, specAttempts: number, qualityAttempts: number, manifestEntry: object }}
+ */
+async function executeSingleTask(task, taskNumber, totalTasks, allTasks, buildManifest, runId, ctx, batchContext) {
+  // Build scene context with accumulated manifest from prior tasks
+  const taskIndex = taskNumber - 1;
+  const sceneContext = buildSceneContext(task, taskIndex, allTasks, buildManifest, batchContext);
+  const mcpImplInstructions = runId ? mcpImplementerInstructions(runId, taskNumber, task.name) : [];
+
+  // TDD Implementation with MCP state access
+  let implResult = await ctx.task(subagentImplementerTask, {
+    taskNumber,
+    taskName: task.name,
+    taskDescription: task.fullText,
+    sceneContext,
+    instructions: [...implementerInstructions, ...mcpImplInstructions]
+  });
+
+  // Spec Compliance Review (MUST come first)
+  const mcpSpecInstructions = runId ? mcpReviewerInstructions(runId, taskNumber, task.name, 'spec') : [];
+  let specPassed = false;
+  let specAttempts = 0;
+  while (!specPassed && specAttempts < 3) {
+    specAttempts++;
+    const specReview = await ctx.task(subagentSpecReviewerTask, {
+      taskName: task.name,
+      specification: task.fullText,
+      implementerReport: implResult,
+      buildManifest,
+      instructions: [...specReviewerInstructions, ...mcpSpecInstructions]
+    });
+
+    if (specReview.passed) {
+      specPassed = true;
+    } else if (specAttempts >= 3) {
+      await ctx.breakpoint({
+        question: [
+          `Spec compliance review failed 3 times for Task ${taskNumber}: ${task.name}`,
+          '',
+          'Latest issues:',
+          ...specReview.issues.map(issue => `  - ${issue}`),
+          '',
+          'Resolve this breakpoint to accept the current state and continue.',
+          'To abort, leave the breakpoint unresolved and cancel the run.'
+        ].join('\n'),
+        title: 'Spec Review Escalation',
+        context: { runId: runId || ctx.runId }
+      });
+      specPassed = true; // Human approved continuation
+    } else {
+      // Dedicated fixer subagent instead of reusing implementer
+      implResult = await ctx.task(subagentFixerTask, {
+        taskName: `${task.name} (spec fix #${specAttempts})`,
+        originalTaskDescription: task.fullText,
+        priorImplementation: implResult,
+        reviewIssues: specReview.issues,
+        reviewType: 'spec compliance',
+        buildManifest,
+        instructions: [...fixerInstructions('spec compliance'), ...(runId ? mcpTddFixerInstructions(runId, taskNumber, task.name, 'spec') : [])]
+      });
+    }
+  }
+
+  // Code Quality Review (ONLY after spec passes)
+  const mcpQualityInstructions = runId ? mcpReviewerInstructions(runId, taskNumber, task.name, 'quality') : [];
+  let qualityPassed = false;
+  let qualityAttempts = 0;
+  while (!qualityPassed && qualityAttempts < 3) {
+    qualityAttempts++;
+    const qualityReview = await ctx.task(subagentQualityReviewerTask, {
+      taskName: task.name,
+      specification: task.fullText,
+      implementerReport: implResult,
+      buildManifest,
+      instructions: [...qualityReviewerInstructions, ...mcpQualityInstructions]
+    });
+
+    if (qualityReview.passed) {
+      qualityPassed = true;
+    } else if (qualityAttempts >= 3) {
+      await ctx.breakpoint({
+        question: [
+          `Code quality review failed 3 times for Task ${taskNumber}: ${task.name}`,
+          '',
+          'Latest issues:',
+          ...qualityReview.issues.map(issue => `  - ${issue}`),
+          '',
+          'Resolve this breakpoint to accept the current quality and continue.',
+          'To abort, leave the breakpoint unresolved and cancel the run.'
+        ].join('\n'),
+        title: 'Quality Review Escalation',
+        context: { runId: runId || ctx.runId }
+      });
+      qualityPassed = true; // Human approved continuation
+    } else {
+      // Dedicated fixer subagent instead of reusing implementer
+      implResult = await ctx.task(subagentFixerTask, {
+        taskName: `${task.name} (quality fix #${qualityAttempts})`,
+        originalTaskDescription: task.fullText,
+        priorImplementation: implResult,
+        reviewIssues: qualityReview.issues,
+        reviewType: 'code quality',
+        buildManifest,
+        instructions: [...fixerInstructions('code quality'), ...(runId ? mcpTddFixerInstructions(runId, taskNumber, task.name, 'quality') : [])]
+      });
+    }
+  }
+
+  const manifestEntry = buildManifestEntry(taskNumber, task.name, implResult);
+  return { name: task.name, specAttempts, qualityAttempts, manifestEntry };
+}
+
 // === PHASE FUNCTION ===
 
 export async function subagentTddLoop(tasks, runId, ctx) {
@@ -270,118 +416,110 @@ export async function subagentTddLoop(tasks, runId, ctx) {
   const completedTasks = [];
   const buildManifest = [];
 
-  for (let i = 0; i < tasks.length; i++) {
-    const task = tasks[i];
-    const taskNumber = i + 1;
-    log(`Task ${taskNumber}/${tasks.length}: ${task.name}`);
+  if (!hasParallelCapableTasks(tasks)) {
+    // Sequential execution (backward compatible - identical to original behavior)
+    for (let i = 0; i < tasks.length; i++) {
+      const task = tasks[i];
+      const taskNumber = i + 1;
+      log(`Task ${taskNumber}/${tasks.length}: ${task.name}`);
 
-    // Build scene context with accumulated manifest from prior tasks
-    const sceneContext = buildSceneContext(task, i, tasks, buildManifest);
-    const mcpImplInstructions = runId ? mcpImplementerInstructions(runId, taskNumber, task.name) : [];
+      const result = await executeSingleTask(
+        task, taskNumber, tasks.length, tasks, buildManifest, runId, ctx, null
+      );
 
-    // 3a: TDD Implementation with MCP state access
-    let implResult = await ctx.task(subagentImplementerTask, {
-      taskNumber,
-      taskName: task.name,
-      taskDescription: task.fullText,
-      sceneContext,
-      instructions: [...implementerInstructions, ...mcpImplInstructions]
-    });
-
-    // 3b: Spec Compliance Review (MUST come first)
-    const mcpSpecInstructions = runId ? mcpReviewerInstructions(runId, taskNumber, task.name, 'spec') : [];
-    let specPassed = false;
-    let specAttempts = 0;
-    while (!specPassed && specAttempts < 3) {
-      specAttempts++;
-      const specReview = await ctx.task(subagentSpecReviewerTask, {
-        taskName: task.name,
-        specification: task.fullText,
-        implementerReport: implResult,
-        buildManifest,
-        instructions: [...specReviewerInstructions, ...mcpSpecInstructions]
+      buildManifest.push(result.manifestEntry);
+      completedTasks.push({ name: result.name, specAttempts: result.specAttempts, qualityAttempts: result.qualityAttempts });
+      log(`Completed Task ${taskNumber}/${tasks.length}: ${task.name}`);
+    }
+  } else {
+    // Parallel execution with dependency-aware batching
+    const validation = validateDependencies(tasks);
+    if (!validation.valid) {
+      log(`Invalid task dependencies detected: ${validation.errors.join('; ')}`);
+      await ctx.breakpoint({
+        question: [
+          'Task dependency validation failed:',
+          '',
+          ...validation.errors.map(e => `  - ${e}`),
+          '',
+          'Falling back to sequential execution.',
+          'Resolve to continue with sequential mode.'
+        ].join('\n'),
+        title: 'Dependency Validation Failed',
+        context: { runId: runId || ctx.runId }
       });
 
-      if (specReview.passed) {
-        specPassed = true;
-      } else if (specAttempts >= 3) {
-        await ctx.breakpoint({
-          question: [
-            `Spec compliance review failed 3 times for Task ${taskNumber}: ${task.name}`,
-            '',
-            'Latest issues:',
-            ...specReview.issues.map(issue => `  - ${issue}`),
-            '',
-            'Resolve this breakpoint to accept the current state and continue.',
-            'To abort, leave the breakpoint unresolved and cancel the run.'
-          ].join('\n'),
-          title: 'Spec Review Escalation',
-          context: { runId: runId || ctx.runId }
-        });
-        specPassed = true; // Human approved continuation
-      } else {
-        // Dedicated fixer subagent instead of reusing implementer
-        implResult = await ctx.task(subagentFixerTask, {
-          taskName: `${task.name} (spec fix #${specAttempts})`,
-          originalTaskDescription: task.fullText,
-          priorImplementation: implResult,
-          reviewIssues: specReview.issues,
-          reviewType: 'spec compliance',
-          buildManifest,
-          instructions: [...fixerInstructions('spec compliance'), ...(runId ? mcpTddFixerInstructions(runId, taskNumber, task.name, 'spec') : [])]
-        });
+      // Fall back to sequential
+      for (let i = 0; i < tasks.length; i++) {
+        const task = tasks[i];
+        const taskNumber = i + 1;
+        log(`Task ${taskNumber}/${tasks.length}: ${task.name} (sequential fallback)`);
+
+        const result = await executeSingleTask(
+          task, taskNumber, tasks.length, tasks, buildManifest, runId, ctx, null
+        );
+
+        buildManifest.push(result.manifestEntry);
+        completedTasks.push({ name: result.name, specAttempts: result.specAttempts, qualityAttempts: result.qualityAttempts });
+        log(`Completed Task ${taskNumber}/${tasks.length}: ${task.name}`);
+      }
+    } else {
+      const batches = buildParallelBatches(tasks);
+      log(`Parallel execution: ${batches.length} batches from ${tasks.length} tasks`);
+
+      for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
+        const batch = batches[batchIdx];
+        const upcomingBatches = batches.slice(batchIdx + 1);
+        const batchNum = batchIdx + 1;
+
+        if (batch.length === 1) {
+          // Single task in batch - skip parallel overhead
+          const { taskNumber, task } = batch[0];
+          log(`Batch ${batchNum}/${batches.length}: Task ${taskNumber} (solo)`);
+
+          const batchContext = {
+            peerTasks: batch,
+            upcomingBatches,
+            currentBatchIndex: batchIdx
+          };
+
+          const result = await executeSingleTask(
+            task, taskNumber, tasks.length, tasks, [...buildManifest], runId, ctx, batchContext
+          );
+
+          buildManifest.push(result.manifestEntry);
+          completedTasks.push({ name: result.name, specAttempts: result.specAttempts, qualityAttempts: result.qualityAttempts });
+          log(`Completed Batch ${batchNum}/${batches.length}: Task ${taskNumber}`);
+        } else {
+          // Multiple tasks - execute in parallel via ctx.parallel.map
+          const taskNumbers = batch.map(b => b.taskNumber).join(', ');
+          log(`Batch ${batchNum}/${batches.length}: Tasks [${taskNumbers}] (parallel)`);
+
+          // Freeze manifest snapshot for this batch - all tasks see the same state
+          const manifestSnapshot = [...buildManifest];
+
+          const batchResults = await ctx.parallel.map(batch, (entry) => {
+            const batchContext = {
+              peerTasks: batch,
+              upcomingBatches,
+              currentBatchIndex: batchIdx
+            };
+
+            return executeSingleTask(
+              entry.task, entry.taskNumber, tasks.length, tasks, manifestSnapshot, runId, ctx, batchContext
+            );
+          });
+
+          // Merge results sorted by taskNumber for determinism
+          const sortedResults = [...batchResults].sort((a, b) => a.manifestEntry.taskNumber - b.manifestEntry.taskNumber);
+          for (const result of sortedResults) {
+            buildManifest.push(result.manifestEntry);
+            completedTasks.push({ name: result.name, specAttempts: result.specAttempts, qualityAttempts: result.qualityAttempts });
+          }
+          log(`Completed Batch ${batchNum}/${batches.length}: ${batch.length} tasks`);
+        }
       }
     }
-
-    // 3c: Code Quality Review (ONLY after spec passes)
-    const mcpQualityInstructions = runId ? mcpReviewerInstructions(runId, taskNumber, task.name, 'quality') : [];
-    let qualityPassed = false;
-    let qualityAttempts = 0;
-    while (!qualityPassed && qualityAttempts < 3) {
-      qualityAttempts++;
-      const qualityReview = await ctx.task(subagentQualityReviewerTask, {
-        taskName: task.name,
-        specification: task.fullText,
-        implementerReport: implResult,
-        buildManifest,
-        instructions: [...qualityReviewerInstructions, ...mcpQualityInstructions]
-      });
-
-      if (qualityReview.passed) {
-        qualityPassed = true;
-      } else if (qualityAttempts >= 3) {
-        await ctx.breakpoint({
-          question: [
-            `Code quality review failed 3 times for Task ${taskNumber}: ${task.name}`,
-            '',
-            'Latest issues:',
-            ...qualityReview.issues.map(issue => `  - ${issue}`),
-            '',
-            'Resolve this breakpoint to accept the current quality and continue.',
-            'To abort, leave the breakpoint unresolved and cancel the run.'
-          ].join('\n'),
-          title: 'Quality Review Escalation',
-          context: { runId: runId || ctx.runId }
-        });
-        qualityPassed = true; // Human approved continuation
-      } else {
-        // Dedicated fixer subagent instead of reusing implementer
-        implResult = await ctx.task(subagentFixerTask, {
-          taskName: `${task.name} (quality fix #${qualityAttempts})`,
-          originalTaskDescription: task.fullText,
-          priorImplementation: implResult,
-          reviewIssues: qualityReview.issues,
-          reviewType: 'code quality',
-          buildManifest,
-          instructions: [...fixerInstructions('code quality'), ...(runId ? mcpTddFixerInstructions(runId, taskNumber, task.name, 'quality') : [])]
-        });
-      }
-    }
-
-    buildManifest.push(buildManifestEntry(taskNumber, task.name, implResult));
-
-    completedTasks.push({ name: task.name, specAttempts, qualityAttempts });
-    log(`Completed Task ${taskNumber}/${tasks.length}: ${task.name}`);
   }
 
   return { completedTasks, buildManifest };

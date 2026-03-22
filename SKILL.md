@@ -42,6 +42,7 @@ Without this, files imported from outside `.a5c/` will fail with ERR_REQUIRE_ESM
 | `process/design-gate.js` | 1 | `designGate()`, `contextExplorerTask`, `designProposalTask` | No implementation without approved design |
 | `process/planning-gate.js` | 2 | `planningGate()`, `planWriterTask`, `planVerifierTask` | No code without bite-sized TDD plan |
 | `process/subagent-tdd-loop.js` | 3 | `subagentTddLoop()`, `subagentImplementerTask`, `subagentFixerTask`, `subagentSpecReviewerTask`, `subagentQualityReviewerTask` | No production code without failing test first; Do not trust reports; Spec before quality |
+| `process/parallel-task-helpers.js` | shared | `hasParallelCapableTasks()`, `validateDependencies()`, `buildParallelBatches()` | Dependency-aware parallel task batching for Phase 3 |
 | `process/mcp-state-helpers.js` | shared | `mcpStateInstructions()`, `mcpImplementerInstructions()`, `mcpReviewerInstructions()`, `mcpTddFixerInstructions()`, `mcpFixInstructions()`, `mcpDebuggingInstructions()` | MCP instruction generators for agent prompts |
 | `process/verification-gate.js` | 4 | `verificationGate()`, `verificationTask` | No completion claims without fresh verification evidence |
 | `process/debugging-phase.js` | 5 | `debuggingPhase(ctx, issue, attempt?)`, `rootCauseInvestigationTask`, `patternAnalysisTask`, `hypothesisTestingTask` | No fixes without root cause investigation first; Max 3 debug attempts before escalation |
@@ -114,6 +115,7 @@ These are non-negotiable. Every process built with this skill must enforce all o
 | No completion claims without fresh verification evidence | `superpowers:verification-before-completion` | Verification Gate agent runs commands, reads output |
 | No fixes without root cause investigation first | `superpowers:systematic-debugging` | Debugging phase enforces 4-phase investigation |
 | Verify tests pass before presenting finish options | `superpowers:finishing-a-development-branch` | Finishing Gate runs tests before breakpoint |
+| Parallel tasks must not modify overlapping files | `parallel-task-helpers.js` | Dependency validation + plan verifier checks + scene context warnings |
 | Max 3 retry attempts before human escalation | All retry loops | Escalation breakpoints in spec review, quality review, debugging, and finishing phases |
 
 ## Quality Gate Definitions
@@ -131,6 +133,26 @@ These are non-negotiable. Every process built with this skill must enforce all o
 | Test Verification | 6 | Agent | Finish options | Agent runs full suite, reports exact counts; must be 0 failures |
 | Finishing Escalation | 6 | Breakpoint | Completion | After 3 failed test/debug cycles, escalates to human with failure details |
 | Finish Decision | 6 | Breakpoint | Completion | Human chooses from exactly 4 options |
+
+## Parallel Task Execution
+
+Phase 3 supports dependency-aware parallel task batching. When the plan writer includes `dependsOn` arrays on tasks, the TDD loop groups independent tasks into batches that execute concurrently via `ctx.parallel.map()`.
+
+**How it works:**
+1. Plan writer declares `dependsOn: [taskNumbers]` for each task (1-based)
+2. `validateDependencies()` checks for valid refs, self-references, and cycles (Kahn's algorithm)
+3. `buildParallelBatches()` groups tasks by topological level with maxBatchSize cap (default 5)
+4. Each batch executes via `ctx.parallel.map()` — tasks in a batch share a frozen manifest snapshot
+5. Results merge in taskNumber order after each batch completes
+
+**Backward compatibility:**
+- Tasks without `dependsOn` fields trigger sequential execution (identical to original)
+- Invalid dependencies show a breakpoint warning and fall back to sequential
+- Single-task batches skip parallel overhead
+
+**Scene context in parallel mode:**
+- Shows "Running Concurrently" peers with file-conflict warning instead of "Upcoming Tasks"
+- Shows "Upcoming Batches" with batch numbers for future work
 
 ## Critical Rules
 
