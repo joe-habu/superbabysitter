@@ -7,6 +7,7 @@
 
 import { defineTask } from '@a5c-ai/babysitter-sdk';
 import { mcpStateInstructions } from './mcp-state-helpers.js';
+import { buildManifestInstructions } from './build-manifest-helpers.js';
 
 // === TASK DEFINITIONS ===
 
@@ -64,6 +65,7 @@ export async function verificationGate(inputs, ctx) {
         queryInstructions: { getRunSummary: true, searchPhase: 'tdd', searchDecisions: true }
       })
     : [];
+  const manifestInstructions = buildManifestInstructions(inputs.buildManifest, { perspective: 'verification' });
 
   const verificationResult = await ctx.task(verificationTask, {
     feature: inputs.feature,
@@ -77,6 +79,7 @@ export async function verificationGate(inputs, ctx) {
       '  4. RECORD command, output, and verdict',
       'Run full test suite. Report actual pass/fail counts.',
       'Write report to artifacts/verification-report.md',
+      ...manifestInstructions,
       ...mcpInstructions,
       ...(runId ? [`Also call save_artifact(run_id=${runId}, name="verification-report.md", content=<the report>)`] : [])
     ]

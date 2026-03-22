@@ -8,6 +8,7 @@
 import { defineTask } from '@a5c-ai/babysitter-sdk';
 import { subagentImplementerTask } from './subagent-tdd-loop.js';
 import { mcpDebuggingInstructions, mcpFixInstructions } from './mcp-state-helpers.js';
+import { buildManifestInstructions, buildManifestFilesChanged } from './build-manifest-helpers.js';
 
 // === HELPER FUNCTIONS ===
 
@@ -139,7 +140,7 @@ export const hypothesisTestingTask = defineTask('hypothesis-testing', (args, tas
 
 const MAX_DEBUG_ATTEMPTS = 3;
 
-export async function debuggingPhase(ctx, issue, attempt = 1, runId = null, priorAttempts = []) {
+export async function debuggingPhase(ctx, issue, attempt = 1, runId = null, priorAttempts = [], buildManifest = null) {
   const log = (ctx.log || (() => {})).bind(ctx);
   log(`Phase 5: Debugging Phase (attempt ${attempt}/${MAX_DEBUG_ATTEMPTS})`);
 
@@ -149,6 +150,11 @@ export async function debuggingPhase(ctx, issue, attempt = 1, runId = null, prio
   const mcpRootCauseInstr = runId ? mcpDebuggingInstructions(runId, 'root_cause_investigation') : [];
   const mcpPatternInstr = runId ? mcpDebuggingInstructions(runId, 'pattern_analysis') : [];
   const mcpHypothesisInstr = runId ? mcpDebuggingInstructions(runId, 'hypothesis_test') : [];
+  const manifestInstructions = buildManifestInstructions(buildManifest, { perspective: 'debugging' });
+  const manifestFiles = buildManifestFilesChanged(buildManifest);
+  const recentlyChangedInstr = manifestFiles.length > 0
+    ? ['RECENTLY CHANGED FILES (investigate these first):', ...manifestFiles.map(f => `  - ${f}`)]
+    : [];
 
   // Phase 1: Root cause investigation (REQUIRED before any fix)
   const rootCause = await ctx.task(rootCauseInvestigationTask, {
@@ -166,6 +172,8 @@ export async function debuggingPhase(ctx, issue, attempt = 1, runId = null, prio
       '4. Trace data flow backward to source',
       'Report hypothesis with evidence, NOT a fix',
       ...buildPriorAttemptsInstructions(priorAttempts),
+      ...manifestInstructions,
+      ...recentlyChangedInstr,
       ...mcpRootCauseInstr
     ]
   });
@@ -176,6 +184,7 @@ export async function debuggingPhase(ctx, issue, attempt = 1, runId = null, prio
     instructions: [
       'Find working examples, compare, list differences',
       'Understand dependencies and assumptions',
+      ...manifestInstructions,
       ...mcpPatternInstr
     ]
   });
@@ -186,6 +195,7 @@ export async function debuggingPhase(ctx, issue, attempt = 1, runId = null, prio
     instructions: [
       'Form SINGLE hypothesis. Test with SMALLEST change.',
       'ONE variable at a time. Report confirmed or not.',
+      ...manifestInstructions,
       ...mcpHypothesisInstr
     ]
   });
@@ -238,6 +248,6 @@ export async function debuggingPhase(ctx, issue, attempt = 1, runId = null, prio
       return undefined;
     }
     log('Hypothesis not confirmed. Returning to root cause investigation.');
-    return await debuggingPhase(ctx, issue, attempt + 1, runId, [...priorAttempts, attemptRecord]);
+    return await debuggingPhase(ctx, issue, attempt + 1, runId, [...priorAttempts, attemptRecord], buildManifest);
   }
 }

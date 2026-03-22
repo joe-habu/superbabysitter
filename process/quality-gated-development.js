@@ -60,7 +60,7 @@ export async function process(inputs, ctx) {
   // PHASE 4: VERIFICATION GATE (superpowers:verification-before-completion)
   // ========================================================================
 
-  const { verificationResult } = await verificationGate({ feature, planResult, runId }, ctx);
+  const { verificationResult } = await verificationGate({ feature, planResult, runId, buildManifest }, ctx);
 
   // ========================================================================
   // PHASE 5: DEBUGGING (conditional - superpowers:systematic-debugging)
@@ -77,10 +77,10 @@ export async function process(inputs, ctx) {
         await debuggingPhase(ctx, {
           description: `Requirement failed: ${failedReq.requirement}`,
           structuredFailure: failedReq
-        }, 1, runId);
+        }, 1, runId, [], buildManifest);
       }
 
-      const reVerification = await verificationGate({ feature, planResult, runId }, ctx);
+      const reVerification = await verificationGate({ feature, planResult, runId, buildManifest }, ctx);
       currentVerification = reVerification.verificationResult;
 
       if (currentVerification.passed) break;
@@ -110,7 +110,7 @@ export async function process(inputs, ctx) {
   // PHASE 6: FINISHING GATE (superpowers:finishing-a-development-branch)
   // ========================================================================
 
-  await finishingGate({ runId }, ctx);
+  await finishingGate({ runId, buildManifest }, ctx);
 
   // Ensure MCP run is marked complete (fallback if finishing gate agent didn't do it)
   if (runId) {

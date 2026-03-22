@@ -8,6 +8,7 @@
 import { defineTask } from '@a5c-ai/babysitter-sdk';
 import { debuggingPhase } from './debugging-phase.js';
 import { mcpFinishingInstructions } from './mcp-state-helpers.js';
+import { buildManifestInstructions } from './build-manifest-helpers.js';
 
 // === TASK DEFINITIONS ===
 
@@ -54,11 +55,13 @@ export async function finishingGate(inputs, ctx, attempt = 1) {
   const mcpInstructions = runId
     ? mcpFinishingInstructions(runId)
     : [];
+  const manifestInstructions = buildManifestInstructions(inputs.buildManifest, { perspective: 'finishing' });
 
   const finalTests = await ctx.task(testRunnerTask, {
     instructions: [
       'IRON LAW: No completion claims without fresh verification evidence.',
       'Run FULL test suite. Read FULL output. Report exact numbers.',
+      ...manifestInstructions,
       ...mcpInstructions
     ]
   });
@@ -91,7 +94,7 @@ export async function finishingGate(inputs, ctx, attempt = 1) {
           total: finalTests.total,
           failureDetails: finalTests.failureDetails
         }
-      }, 1, runId);
+      }, 1, runId, [], inputs.buildManifest || null);
 
       // Re-run tests after fix
       return await finishingGate(inputs, ctx, attempt + 1);
