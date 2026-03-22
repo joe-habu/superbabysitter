@@ -54,7 +54,7 @@ export async function process(inputs, ctx) {
   //   (superpowers:subagent-driven-development + test-driven-development)
   // ========================================================================
 
-  const { completedTasks } = await subagentTddLoop(planResult.tasks, runId, ctx);
+  const { completedTasks, buildManifest } = await subagentTddLoop(planResult.tasks, runId, ctx);
 
   // ========================================================================
   // PHASE 4: VERIFICATION GATE (superpowers:verification-before-completion)
@@ -124,6 +124,7 @@ export async function process(inputs, ctx) {
     feature,
     tasksCompleted: completedTasks.length,
     completedTasks,
+    buildManifest,
     runId,
     artifacts: {
       design: 'artifacts/design.md',

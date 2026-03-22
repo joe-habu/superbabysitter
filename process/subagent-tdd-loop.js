@@ -2,7 +2,7 @@
  * @process superbabysitter/subagent-tdd-loop
  * @description Phase 3: Subagent TDD Implementation Loop - merges babysitter orchestration with superpowers subagent-driven-development pattern. Each task gets scene-setting context, dedicated fixer subagents, and enhanced reviewer prompts that distrust implementer reports.
  * @inputs { tasks: Array<{name, fullText, context}> }
- * @outputs { completedTasks: Array<{name, specAttempts, qualityAttempts}> }
+ * @outputs { completedTasks: Array<{name, specAttempts, qualityAttempts}>, buildManifest: Array<{taskNumber, taskName, filesChanged, decisions, summary}> }
  */
 
 import { defineTask } from '@a5c-ai/babysitter-sdk';
@@ -54,10 +54,18 @@ const qualityReviewerInstructions = [
 ];
 
 // === HELPER FUNCTIONS ===
-// buildMinimalSceneContext provides position/upcoming task context.
-// MCP state handles prior task context -- agents call get_run_summary() and search_results().
 
-function buildMinimalSceneContext(task, taskIndex, allTasks) {
+function buildManifestEntry(taskNumber, taskName, implResult) {
+  return {
+    taskNumber,
+    taskName,
+    filesChanged: implResult.filesChanged || [],
+    decisions: implResult.architecturalDecisions || [],
+    summary: implResult.summary || ''
+  };
+}
+
+function buildSceneContext(task, taskIndex, allTasks, buildManifest) {
   const lines = [];
   const taskNumber = taskIndex + 1;
   const totalTasks = allTasks.length;
@@ -82,8 +90,32 @@ function buildMinimalSceneContext(task, taskIndex, allTasks) {
     lines.push('');
   }
 
+  // Accumulated build manifest from prior tasks
+  if (buildManifest && buildManifest.length > 0) {
+    lines.push('## What Was Built (prior tasks in this run)');
+    for (const entry of buildManifest) {
+      lines.push(`### Task ${entry.taskNumber}: ${entry.taskName}`);
+      if (entry.summary) {
+        lines.push(entry.summary);
+      }
+      if (entry.filesChanged.length > 0) {
+        lines.push('Files changed:');
+        for (const f of entry.filesChanged) {
+          lines.push(`- ${f}`);
+        }
+      }
+      if (entry.decisions.length > 0) {
+        lines.push('Architectural decisions:');
+        for (const d of entry.decisions) {
+          lines.push(`- ${d}`);
+        }
+      }
+      lines.push('');
+    }
+  }
+
   lines.push('## Prior Tasks and Decisions');
-  lines.push('Query MCP state tools to see completed tasks and architectural decisions.');
+  lines.push('The build manifest above shows what prior tasks built. For deeper context, query MCP state tools.');
   lines.push('');
 
   return lines.join('\n');
@@ -139,7 +171,8 @@ export const subagentFixerTask = defineTask('subagent-fixer', (args, taskCtx) =>
         originalTaskDescription: args.originalTaskDescription,
         priorImplementation: args.priorImplementation,
         reviewIssues: args.reviewIssues,
-        reviewType: args.reviewType
+        reviewType: args.reviewType,
+        ...(args.buildManifest && args.buildManifest.length > 0 ? { buildManifest: args.buildManifest } : {})
       },
       instructions: args.instructions,
       outputFormat: 'JSON with filesChanged, testResults, summary, concerns, architecturalDecisions, dependsOn, selfReviewFindings'
@@ -174,7 +207,8 @@ export const subagentSpecReviewerTask = defineTask('subagent-spec-reviewer', (ar
       task: 'Verify implementation matches specification exactly - nothing more, nothing less',
       context: {
         specification: args.specification,
-        implementerReport: args.implementerReport
+        implementerReport: args.implementerReport,
+        ...(args.buildManifest && args.buildManifest.length > 0 ? { buildManifest: args.buildManifest } : {})
       },
       instructions: args.instructions,
       outputFormat: 'JSON with passed (boolean), issues (array of strings), evidence (string)'
@@ -205,7 +239,8 @@ export const subagentQualityReviewerTask = defineTask('subagent-quality-reviewer
       task: 'Review implementation for code quality, maintainability, and test quality',
       context: {
         specification: args.specification,
-        implementerReport: args.implementerReport
+        implementerReport: args.implementerReport,
+        ...(args.buildManifest && args.buildManifest.length > 0 ? { buildManifest: args.buildManifest } : {})
       },
       instructions: args.instructions,
       outputFormat: 'JSON with passed (boolean), issues (array with severity), strengths (array)'
@@ -233,15 +268,15 @@ export async function subagentTddLoop(tasks, runId, ctx) {
   log('Phase 3: Subagent TDD Implementation Loop');
 
   const completedTasks = [];
+  const buildManifest = [];
 
   for (let i = 0; i < tasks.length; i++) {
     const task = tasks[i];
     const taskNumber = i + 1;
     log(`Task ${taskNumber}/${tasks.length}: ${task.name}`);
 
-    // Build minimal scene context (position + upcoming tasks only)
-    // Agents query MCP for completed tasks, decisions, and dependencies
-    const sceneContext = buildMinimalSceneContext(task, i, tasks);
+    // Build scene context with accumulated manifest from prior tasks
+    const sceneContext = buildSceneContext(task, i, tasks, buildManifest);
     const mcpImplInstructions = runId ? mcpImplementerInstructions(runId, taskNumber, task.name) : [];
 
     // 3a: TDD Implementation with MCP state access
@@ -263,6 +298,7 @@ export async function subagentTddLoop(tasks, runId, ctx) {
         taskName: task.name,
         specification: task.fullText,
         implementerReport: implResult,
+        buildManifest,
         instructions: [...specReviewerInstructions, ...mcpSpecInstructions]
       });
 
@@ -291,6 +327,7 @@ export async function subagentTddLoop(tasks, runId, ctx) {
           priorImplementation: implResult,
           reviewIssues: specReview.issues,
           reviewType: 'spec compliance',
+          buildManifest,
           instructions: [...fixerInstructions('spec compliance'), ...(runId ? mcpTddFixerInstructions(runId, taskNumber, task.name, 'spec') : [])]
         });
       }
@@ -306,6 +343,7 @@ export async function subagentTddLoop(tasks, runId, ctx) {
         taskName: task.name,
         specification: task.fullText,
         implementerReport: implResult,
+        buildManifest,
         instructions: [...qualityReviewerInstructions, ...mcpQualityInstructions]
       });
 
@@ -334,16 +372,17 @@ export async function subagentTddLoop(tasks, runId, ctx) {
           priorImplementation: implResult,
           reviewIssues: qualityReview.issues,
           reviewType: 'code quality',
+          buildManifest,
           instructions: [...fixerInstructions('code quality'), ...(runId ? mcpTddFixerInstructions(runId, taskNumber, task.name, 'quality') : [])]
         });
       }
     }
 
-    // State is recorded by agents via MCP tools - no manifest accumulation needed
+    buildManifest.push(buildManifestEntry(taskNumber, task.name, implResult));
 
     completedTasks.push({ name: task.name, specAttempts, qualityAttempts });
     log(`Completed Task ${taskNumber}/${tasks.length}: ${task.name}`);
   }
 
-  return { completedTasks };
+  return { completedTasks, buildManifest };
 }
